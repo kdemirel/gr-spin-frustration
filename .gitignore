@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Numba on-disk caches
+*.nbi
+*.nbc
+.numba_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Simulation output (large, reproducible from the code + config.json)
+results/
+outputs/
+*.npz
+!tests/data/*.npz
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+*.icloud
+*~

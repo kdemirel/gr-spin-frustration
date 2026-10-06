@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+type: software
+title: "gr-spin-frustration: relaxation of classical spins with the general-relativistic spin-spin interaction on random point sets"
+abstract: >-
+  Numerical code for the zero-temperature relaxation of classical spins fixed at
+  Poisson-distributed positions and coupled by the general-relativistic spin-spin
+  interaction, together with the ensemble analysis of the pair-correlation
+  functions C(r) and Q(r).
+authors:
+  - family-names: Demirel
+    given-names: Kerim
+    affiliation: "Department of Physics, Middle East Technical University, 06800 Ankara, Türkiye"
+repository-code: "https://github.com/kdemirel/gr-spin-frustration"
+url: "https://github.com/kdemirel/gr-spin-frustration"
+license: MIT
+version: 0.1.0
+date-released: 2026-10-06
+keywords:
+  - general relativity
+  - spin-spin interaction
+  - geometric frustration
+  - classical spins
+  - pair correlations
+# After publication, add the article under `preferred-citation:` (type: article).

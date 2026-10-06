@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gr-spin-frustration"
+version = "0.1.0"
+description = "Zero-temperature relaxation of classical spins with the general-relativistic spin-spin interaction on random point sets: frustration and pair-correlation analysis."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Kerim Demirel" },
+]
+keywords = [
+    "general relativity",
+    "spin-spin interaction",
+    "geometric frustration",
+    "classical spins",
+    "Poisson point process",
+    "pair correlations",
+    "numba",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=1.5",
+    "matplotlib>=3.6",
+    "numba>=0.58",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "ruff>=0.16,<0.17",
+]
+notebook = [
+    "jupyterlab",
+]
+
+[project.scripts]
+grspin = "grspin.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/kdemirel/gr-spin-frustration"
+Repository = "https://github.com/kdemirel/gr-spin-frustration"
+Issues = "https://github.com/kdemirel/gr-spin-frustration/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
