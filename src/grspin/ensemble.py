@@ -9,10 +9,17 @@ Layout of an output directory::
 
 Re-running the same command skips finished realizations; increasing ``n_realizations`` extends the
 ensemble. Results never depend on the number of workers (each realization is seeded independently).
+
+Provenance: ``config.json`` records the software versions, the git commit, whether the tree was
+dirty (then also the diff of the package sources) and a SHA-256 hash of the package sources
+(:func:`provenance`); every realization file written by the runner carries the commit and the
+source hash as well (:func:`record_stamp`), so that an ensemble extended with other code is
+recognisable file by file.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -32,13 +39,17 @@ from . import __version__
 from .config import SimulationConfig
 from .initial import generate_initial_state
 from .neighbors import build_neighbor_list
-from .nn import nn_statistics
-from .observables import pair_statistics, spin_summary
+from .nn import mutual_nn_partners, nn_statistics
+from .observables import dimer_frame_map, pair_statistics, spin_summary
 from .relax import relax
 
 CONFIG_FILENAME = "config.json"
 SEEDS_DIRNAME = "seeds"
 STATES_DIRNAME = "states"
+#: ``git diff`` stored in ``config.json`` is truncated to this many characters.
+GIT_DIFF_MAX_CHARS = 20 * 1024
+#: Keys of a realization file that identify the code which wrote it (:func:`record_stamp`).
+STAMP_KEYS: tuple[str, ...] = ("git_commit", "source_hash")
 
 
 class ConfigMismatchError(RuntimeError):
@@ -54,7 +65,10 @@ def run_realization(
     """Generate, relax and analyse one realization.
 
     Returns ``(record, state)``; ``state`` (positions and spins) is only built if
-    ``return_state`` is true.
+    ``return_state`` is true. With ``config.nn_diagnostics`` the record also holds the
+    nearest-neighbour statistics and the dimer-frame correlation map with the dimer-field test
+    (``dimer_map_*``, ``dimer_ang_*``, ``dimer_field_*`` keys, computed with the run's
+    ``(sigma, gamma)``; see :func:`grspin.observables.dimer_frame_map`).
     """
     t0 = time.perf_counter()
     positions, spins0, magnitudes = generate_initial_state(config, seed)
@@ -89,11 +103,24 @@ def run_realization(
     for prefix, spins in (("init", spins0), ("fin", result.spins)):
         for key, value in spin_summary(spins).items():
             record[f"{prefix}_{key}"] = np.array(value)
-    if result.anneal_acceptance is not None:
-        record["anneal_acceptance"] = np.array(result.anneal_acceptance)
+    if result.anneal_acceptance_per_T is not None:
+        record["anneal_acceptance_per_T"] = result.anneal_acceptance_per_T
+        record["anneal_acceptance_final"] = np.array(result.anneal_acceptance_final)
 
     if config.nn_diagnostics:
         record.update(nn_statistics(positions, result.spins, nlist.tree, box, r_nn, x_edges))
+        partner = mutual_nn_partners(positions, nlist.tree)
+        record.update(
+            dimer_frame_map(
+                positions,
+                result.spins,
+                nlist.tree,
+                box,
+                r_nn,
+                partner,
+                sigma_gamma=config.sigma_gamma,
+            )
+        )
 
     t3 = time.perf_counter()
     record["timing_s"] = np.array([t1 - t0, t2 - t1, t3 - t2])
@@ -140,8 +167,44 @@ def read_config(out_dir: Path) -> SimulationConfig:
         return SimulationConfig.from_dict(json.load(fh)["config"])
 
 
+def source_hash() -> str:
+    """SHA-256 of the package sources: ``src/grspin/*.py`` concatenated in name order.
+
+    Each file is preceded by a line with its name, so renamed files change the hash too. Unlike
+    the git commit, the hash identifies the code even when the working tree is dirty.
+    """
+    here = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for path in sorted(here.glob("*.py")):
+        digest.update(f"# {path.name}\n".encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _git(args: list[str], cwd: Path) -> str | None:
+    """Standard output of ``git <args>`` in ``cwd``, or ``None`` if git fails or is absent."""
+    try:
+        done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n... [truncated: {len(text) - limit} more characters]"
+
+
 def provenance() -> dict[str, Any]:
-    """Software versions, platform and (if available) the git commit of the code."""
+    """Software versions, platform, the hash of the package sources and the git state of the code.
+
+    ``git_commit`` and ``git_dirty`` are ``None`` outside a git checkout. When the package
+    directory is dirty, ``git_status`` holds its porcelain status (modified *and* untracked
+    files) and ``git_diff`` the output of ``git diff HEAD -- src/grspin`` truncated to
+    :data:`GIT_DIFF_MAX_CHARS`; both are ``None`` for a clean tree. ``source_hash``
+    (:func:`source_hash`) identifies the code in either case.
+    """
     import numba
     import scipy
 
@@ -155,25 +218,33 @@ def provenance() -> dict[str, Any]:
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "git_commit": None,
         "git_dirty": None,
+        "git_status": None,
+        "git_diff": None,
+        "source_hash": source_hash(),
     }
     here = Path(__file__).resolve().parent
-    try:
-        commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=here, capture_output=True, text=True, timeout=5
+    commit = _git(["rev-parse", "HEAD"], here)
+    if commit is None:
+        return info
+    info["git_commit"] = commit.strip()
+    status = _git(["status", "--porcelain", "--", str(here)], here)
+    if status is None:
+        return info
+    info["git_dirty"] = bool(status.strip())
+    if info["git_dirty"]:
+        info["git_status"] = status.rstrip()
+        info["git_diff"] = _truncate(
+            _git(["diff", "HEAD", "--", str(here)], here) or "", GIT_DIFF_MAX_CHARS
         )
-        if commit.returncode == 0:
-            info["git_commit"] = commit.stdout.strip()
-            status = subprocess.run(
-                ["git", "status", "--porcelain", "--", str(here)],
-                cwd=here,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            info["git_dirty"] = bool(status.stdout.strip())
-    except (OSError, subprocess.SubprocessError):
-        pass
     return info
+
+
+def record_stamp(prov: dict[str, Any]) -> dict[str, np.ndarray]:
+    """The provenance fields stored in every realization file (:data:`STAMP_KEYS`)."""
+    return {
+        "git_commit": np.array(prov.get("git_commit") or ""),
+        "source_hash": np.array(prov.get("source_hash") or ""),
+    }
 
 
 def pending_seeds(config: SimulationConfig, out_dir: Path) -> list[int]:
@@ -250,7 +321,7 @@ def prepare_run_dir(
                     f"{out_dir} holds a '{saved.get('kind', 'ensemble')}' run, not a '{kind}' run."
                 )
             old = SimulationConfig.from_dict(saved["config"])
-            if old.compat_key() != config.compat_key():
+            if old.compat_key(kind) != config.compat_key(kind):
                 raise ConfigMismatchError(
                     f"{out_dir} contains results for a different configuration; use another "
                     "output directory or pass overwrite=True (--overwrite)."
@@ -269,12 +340,19 @@ def write_run_config(
     history: list[dict[str, Any]],
     n_pending: int,
     n_workers: int,
-) -> None:
+) -> dict[str, Any]:
+    """Write ``config.json`` (configuration, provenance, history) and return the provenance.
+
+    Every invocation appends one history entry (start time, commit, dirty flag, source hash,
+    pending realizations), so an ensemble extended later with other code is traceable.
+    """
     prov = provenance()
     history.append(
         {
             "started_utc": prov["created_utc"],
             "git_commit": prov["git_commit"],
+            "git_dirty": prov["git_dirty"],
+            "source_hash": prov["source_hash"],
             "n_realizations": config.n_realizations,
             "n_pending": n_pending,
             "workers": n_workers,
@@ -286,6 +364,7 @@ def write_run_config(
             fh,
             indent=2,
         )
+    return prov
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -337,9 +416,12 @@ def execute_tasks(
     return time.perf_counter() - t_start
 
 
-def _worker(task: tuple[SimulationConfig, int, str, bool]) -> tuple[int, float]:
-    config, seed, out_dir, with_state = task
+def _worker(
+    task: tuple[SimulationConfig, int, str, bool, dict[str, np.ndarray]],
+) -> tuple[int, float]:
+    config, seed, out_dir, with_state, stamp = task
     record, state = run_realization(config, seed, return_state=with_state)
+    record.update(stamp)
     _atomic_savez(seed_path(Path(out_dir), seed), record)
     if state is not None:
         _atomic_savez(state_path(Path(out_dir), seed), state)
@@ -380,7 +462,7 @@ def run_ensemble(
     todo = pending_seeds(config, out_dir)
     cost = config.estimate_cost()
     workers = resolve_workers(n_workers, len(todo), cost["memory_mb"], memory_limit_mb)
-    write_run_config(out_dir, config, "ensemble", history, len(todo), workers)
+    stamp = record_stamp(write_run_config(out_dir, config, "ensemble", history, len(todo), workers))
 
     def say(message: str) -> None:
         if progress:
@@ -406,7 +488,7 @@ def run_ensemble(
 
     todo_set = set(todo)
     tasks = [
-        (config, seed, str(out_dir), index < config.save_states)
+        (config, seed, str(out_dir), index < config.save_states, stamp)
         for index, seed in enumerate(config.seeds)
         if seed in todo_set
     ]

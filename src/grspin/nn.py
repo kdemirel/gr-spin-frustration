@@ -22,6 +22,27 @@ SMALL_R_EDGES_X = np.geomspace(0.05, 0.8, 13)
 NN_HIST_EDGES_X = np.linspace(0.0, 3.0, 61)
 
 
+def mutual_partners(nn1: np.ndarray) -> np.ndarray:
+    """Partner index of every particle that is in a mutual-nearest-neighbour pair, else ``-1``.
+
+    ``nn1[i]`` is the nearest neighbour of ``i``; the pair ``(i, nn1[i])`` is mutual (a *dimer*)
+    when ``nn1[nn1[i]] == i``. The dimer-frame map (:func:`grspin.observables.dimer_frame_map`)
+    takes this array.
+    """
+    nn1 = np.asarray(nn1)
+    mutual = nn1[nn1] == np.arange(nn1.shape[0])
+    return np.where(mutual, nn1, -1)
+
+
+def mutual_nn_partners(positions: np.ndarray, tree: cKDTree) -> np.ndarray:
+    """:func:`mutual_partners` from a first-neighbour query of ``tree`` (periodic if the tree is).
+
+    Called once per realization; :func:`nn_statistics` derives the same partners from its own
+    deeper neighbour query.
+    """
+    return mutual_partners(tree.query(positions, k=2)[1][:, 1])
+
+
 def nn_statistics(
     positions: np.ndarray,
     spins: np.ndarray,
@@ -51,7 +72,7 @@ def nn_statistics(
 
     dist, ind = tree.query(positions, k=k_max + 1)
     nn1 = ind[:, 1]
-    frac_mutual = float(np.mean(nn1[nn1] == np.arange(n)))
+    frac_mutual = float(np.mean(mutual_partners(nn1) >= 0))
     hist = np.histogram(dist[:, 1] / r_nn, bins=NN_HIST_EDGES_X)[0].astype(np.int64)
 
     ck = np.zeros(k_max)

@@ -47,3 +47,17 @@ def test_mean_nearest_neighbour_distance_of_a_simulated_poisson_process():
     tree = cKDTree(rng.uniform(0, box, size=(n, 3)), boxsize=box)
     d = tree.query(tree.data, k=2)[0][:, 1]
     assert d.mean() == pytest.approx(RNN_UNIT_DENSITY, rel=0.01)
+
+
+def test_two_body_minimum_factor_is_the_config_pair_minimum_factor():
+    """One source of truth: ``theory.two_body_minimum_factor`` delegates to ``config``."""
+    from grspin.config import COUPLINGS, pair_minimum_factor
+
+    for name, (sigma, gamma) in COUPLINGS.items():
+        assert theory.two_body_minimum_factor(sigma, gamma) == pair_minimum_factor(name)
+    assert (
+        theory.two_body_minimum_factor(-1.0, 7.0) == theory.two_body_minimum_factor(1.0, 7.0) == 6.0
+    )
+    assert theory.two_body_minimum_factor(1.0, 1.5) == 1.0  # transverse branch
+    assert "Poisson" in theory.mutual_nn_probability.__doc__
+    assert "Poisson" in theory.nn_distance_pdf.__doc__

@@ -22,6 +22,11 @@ class RelaxResult:
     stage, i.e. the annealed state for ``protocol='anneal'``). It is accumulated exactly from
     the per-spin energy changes; ``energy_drift`` is its relative deviation from a direct
     recomputation at the end (numerical round-off only).
+
+    For ``protocol='anneal'`` ``anneal_acceptance_per_T`` holds the Metropolis acceptance rate
+    at every temperature of the schedule (:func:`anneal_schedule`, hot to cold), and
+    ``anneal_acceptance_final`` is its last entry: the acceptance at ``t_end``, i.e. the
+    fraction of soft spins at the end of the annealing stage, not an overall rate.
     """
 
     spins: np.ndarray
@@ -30,7 +35,25 @@ class RelaxResult:
     total_spin: np.ndarray
     energy_drift: float
     snapshots: dict[int, np.ndarray] = field(default_factory=dict)
-    anneal_acceptance: float | None = None
+    anneal_acceptance_per_T: np.ndarray | None = None
+
+    @property
+    def anneal_acceptance_final(self) -> float | None:
+        """Acceptance rate at the final (coldest) temperature; ``None`` without annealing."""
+        if self.anneal_acceptance_per_T is None:
+            return None
+        return float(self.anneal_acceptance_per_T[-1])
+
+
+def anneal_schedule(config: SimulationConfig) -> np.ndarray:
+    """Absolute temperatures of the annealing schedule, hot to cold.
+
+    ``config.anneal`` gives the schedule in units of ``G S^2 rho``; the kernels work without
+    ``G``, so the temperatures are multiplied by ``spin_scale**2 * density_effective``.
+    """
+    a = config.anneal
+    energy_scale = config.spin_scale**2 * config.density_effective
+    return np.geomspace(a.t_start, a.t_end, a.n_temperatures) * energy_scale
 
 
 def relax(
@@ -40,7 +63,12 @@ def relax(
     config: SimulationConfig,
     seed: int,
 ) -> RelaxResult:
-    """Relax ``spins0`` on the neighbour list according to ``config`` (input is not modified)."""
+    """Relax ``spins0`` on the neighbour list according to ``config`` (input is not modified).
+
+    ``protocol='quench'`` runs ``config.n_sweeps`` greedy alignment sweeps; ``'anneal'`` first
+    runs Metropolis annealing along :func:`anneal_schedule` (recording the acceptance rate at
+    every temperature) and then the same greedy quench.
+    """
     sigma, gamma = config.sigma_gamma
     n = nlist.n_particles
     spins = np.ascontiguousarray(spins0, dtype=float).copy()
@@ -50,20 +78,19 @@ def relax(
     acceptance = None
     if config.protocol == "anneal":
         a = config.anneal
-        energy_scale = config.spin_scale**2 * config.density_effective
-        temps = np.geomspace(a.t_start, a.t_end, a.n_temperatures) * energy_scale
-        acceptance = float(
+        acceptance = np.asarray(
             kernels.metropolis(
                 *args,
                 spins,
                 smag,
-                temps,
+                anneal_schedule(config),
                 a.sweeps_per_temperature,
                 a.step,
                 sigma,
                 gamma,
                 int(seed) % _NUMBA_SEED_MOD,
-            )
+            ),
+            dtype=float,
         )
 
     e_now = float(kernels.energy(*args, spins, sigma, gamma))
@@ -99,7 +126,7 @@ def relax(
         total_spin=total_spin,
         energy_drift=float(drift),
         snapshots=snapshots,
-        anneal_acceptance=acceptance,
+        anneal_acceptance_per_T=acceptance,
     )
 
 

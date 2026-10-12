@@ -5,8 +5,9 @@ spins in units of ``spin_scale`` and energies in units of ``G``. The relaxation 
 invariant under a rescaling of ``box_length``, ``spin_scale`` and ``G`` (only the direction of
 the local field matters), so the only physically independent quantities are the dimensionless
 ones: ``n_particles``, ``r_cut_nn``, ``n_sweeps``, the *shape* of the spin-magnitude
-distribution, the boundary condition and the coupling. Distances are reported in units of the
-mean nearest-neighbour distance ``r_nn = Gamma(4/3) (3 / (4 pi rho))^(1/3) ~ 0.554 rho^(-1/3)``.
+distribution, the boundary condition, the coupling and the hard-core distance
+``min_separation_nn``. Distances are reported in units of the mean nearest-neighbour distance
+``r_nn = Gamma(4/3) (3 / (4 pi rho))^(1/3) ~ 0.554 rho^(-1/3)`` of the ideal Poisson process.
 """
 
 from __future__ import annotations
@@ -22,13 +23,29 @@ import numpy as np
 RNN_UNIT_DENSITY: float = math.gamma(4.0 / 3.0) * (3.0 / (4.0 * math.pi)) ** (1.0 / 3.0)
 
 #: Coupling variants as ``name -> (sigma, gamma)`` in
-#: ``H = -sigma * sum_{i<j} G / r^3 * [S_i.S_j - gamma (S_i.r)(S_j.r)]``.
-#: ``gr`` is the general-relativistic spin-spin interaction; the other two are controls.
+#: ``H = -sigma * sum_{i<j} G / r^3 * [S_i.S_j - gamma (S_i.rhat)(S_j.rhat)]``.
+#:
+#: In the components along the bond (``S_r``) and transverse to it (``S_perp``) the pair energy
+#: reads ``-sigma G / r^3 [S_perp,i . S_perp,j - (gamma - 1) S_r,i S_r,j]``: for ``sigma = +1``
+#: the transverse channel is ferromagnetic with weight 1 and the longitudinal channel
+#: antiferromagnetic with weight ``gamma - 1``. ``gr`` is the general-relativistic spin-spin
+#: interaction (weights 1 : 2); ``isotropic_afm`` and ``dipolar`` are the controls of version
+#: 0.1. The *channel family* ``transverse_only`` (gamma = 1: no longitudinal channel),
+#: ``gamma12`` (1 : 11) and ``longitudinal_only`` (1 : 99) varies the channel weights at fixed
+#: signs. The zero-temperature relaxation uses only the *direction* of the local field, so the
+#: overall scale of ``H`` is irrelevant: gamma = 100 is the longitudinal-only limit up to a 1 %
+#: transverse admixture (a purely longitudinal coupling would be gamma -> infinity).
 COUPLINGS: dict[str, tuple[float, float]] = {
     "gr": (1.0, 3.0),
     "isotropic_afm": (-1.0, 0.0),
     "dipolar": (-1.0, 3.0),
+    "transverse_only": (1.0, 1.0),
+    "gamma12": (1.0, 12.0),
+    "longitudinal_only": (1.0, 100.0),
 }
+#: The channel ("gamma") family in order of increasing longitudinal weight: gamma = 1, 3, 12, 100.
+#: ``gr`` is its gamma = 3 member (plan entry ``M``; the others are the ``S7`` entries).
+CHANNEL_FAMILY: tuple[str, ...] = ("transverse_only", "gr", "gamma12", "longitudinal_only")
 SPIN_DISTRIBUTIONS: tuple[str, ...] = ("uniform", "uniform_half", "equal", "lognormal")
 BOUNDARIES: tuple[str, ...] = ("periodic", "open")
 PROTOCOLS: tuple[str, ...] = ("quench", "anneal")
@@ -36,6 +53,29 @@ UPDATE_ORDERS: tuple[str, ...] = ("sequential", "random")
 
 #: Default cutoff (in units of ``r_nn``) when ``r_cut_nn`` is not given.
 DEFAULT_R_CUT_NN: float = 10.0
+#: Largest hard-core distance ``min_separation_nn`` (units of ``r_nn``). At 0.7 r_nn the excluded
+#: volume ``(4 pi / 3) rho r_min^3`` is 24 % of the box and the packing fraction
+#: ``(pi / 6) rho r_min^3`` 3 %, far below the jamming limit of random sequential addition
+#: (~38 %), so the sequential addition of :func:`grspin.initial.hard_core_positions` needs fewer
+#: than 1.2 attempts per particle on average and terminates quickly at any ``N``.
+MAX_MIN_SEPARATION_NN: float = 0.7
+
+
+def pair_minimum_factor(coupling: str | tuple[float, float]) -> float:
+    """``max(1, |gamma - 1|)``: the two-body minimum of a pair is ``-factor * G * s_i * s_j / r^3``.
+
+    The pair energy is ``-sigma G r^-3 s_i s_j u_i^T M u_j`` with ``M = 1 - gamma rhat rhat^T``,
+    whose eigenvalues are 1 (twice, transverse to the bond) and ``1 - gamma`` (along it). The
+    minimum over the two unit directions is minus the spectral norm of ``M`` for *either* sign
+    of ``sigma``, since flipping one spin absorbs the sign: ``U_min = -G s_i s_j r^-3 max(1,
+    |gamma - 1|)``. GR (gamma = 3): factor 2, antiparallel along the bond; gamma = 1: factor 1,
+    parallel and transverse to the bond; isotropic (gamma = 0): 1; gamma = 12: 11; gamma = 100:
+    99; the dipolar control (sigma = -1, gamma = 3): 2, parallel along the bond. Verified
+    numerically in ``tests/test_config.py``.
+    """
+    _, gamma = COUPLINGS[coupling] if isinstance(coupling, str) else coupling
+    return float(max(1.0, abs(gamma - 1.0)))
+
 
 # Cost model of one realization on one core of an Apple-silicon laptop. The constants were fitted
 # to ``grspin benchmark`` measurements (periodic boundaries, N = 500 ... 20000, r_cut = 3 ... 15 r_nn);
@@ -45,15 +85,31 @@ _SECONDS_PER_EDGE_SWEEP: float = 2.3e-9  # one greedy sweep (or energy pass), pe
 _METROPOLIS_SWEEP_FACTOR: float = 1.3  # a Metropolis sweep costs this many greedy sweeps
 _SECONDS_PER_PAIR_STATISTIC: float = 3.0e-7  # pair statistics, per pair within x_max and per call
 _SECONDS_PER_PARTICLE: float = 5.0e-7  # initial state etc.
+_SECONDS_PER_HARDCORE_PAIR: float = 7.0e-9  # sequential random addition: O(N^2) distance checks
 _BYTES_PER_EDGE_PEAK: float = 220.0  # peak memory while the neighbour list is assembled
 _BASE_MEMORY_MB: float = 250.0  # interpreter, numba, scipy and the observables
 
 
+#: Typical binding energy of a nearest-neighbour dimer, ``2 G <s_i s_j> / r_nn^3`` with
+#: ``<s_i s_j> = S^2 / 4`` for ``s ~ U(0, S)``, in units of ``G S^2 rho`` (about 2.9).
+DIMER_BINDING_ENERGY: float = 2.0 * 0.25 / RNN_UNIT_DENSITY**3
+
+
 @dataclass(frozen=True)
 class AnnealConfig:
-    """Metropolis annealing schedule (temperatures in units of ``G * spin_scale**2 * density``)."""
+    """Metropolis annealing schedule (temperatures in units of ``G * spin_scale**2 * density``).
 
-    t_start: float = 2.0
+    ``n_temperatures`` temperatures are spaced geometrically from ``t_start`` down to ``t_end``,
+    with ``sweeps_per_temperature`` Metropolis sweeps at each of them (see
+    :func:`grspin.kernels.metropolis`). The default ``t_start = 10`` lies above the typical
+    nearest-neighbour dimer binding energy :data:`DIMER_BINDING_ENERGY` (2.9 in the same units),
+    so that the typical dimers are molten at the start of the schedule; the closest pairs, whose
+    binding energies are much larger, stay frozen at any practical ``t_start``. (Version 0.1
+    used ``t_start = 2``, below the dimer energy.) The acceptance rate is recorded at every
+    temperature.
+    """
+
+    t_start: float = 10.0
     t_end: float = 0.01
     n_temperatures: int = 40
     sweeps_per_temperature: int = 10
@@ -77,6 +133,11 @@ class SimulationConfig:
     density: float = 1.0
     box_length: float | None = None  # if given, overrides ``density`` (rho = N / L^3)
     boundary: str = "periodic"
+    #: Hard core in units of ``r_nn``: all pair distances (minimum image when periodic) are at
+    #: least ``min_separation_nn * r_nn``; 0 is the ideal Poisson process (the historic random
+    #: stream), positive values use sequential random addition (``grspin.initial``). The Poisson
+    #: dimer formulas of ``grspin.theory`` (``f_m``, 16/27) apply only to 0.
+    min_separation_nn: float = 0.0
     coupling: str = "gr"
     spin_distribution: str = "uniform"
     spin_scale: float = 1.0
@@ -111,6 +172,11 @@ class SimulationConfig:
             _bad("density must be positive")
         if self.boundary not in BOUNDARIES:
             _bad(f"boundary must be one of {BOUNDARIES}")
+        if not 0.0 <= self.min_separation_nn <= MAX_MIN_SEPARATION_NN:
+            _bad(
+                f"min_separation_nn must be in [0, {MAX_MIN_SEPARATION_NN}] (hard-core distance "
+                "in units of r_nn; 0 = ideal Poisson process)"
+            )
         if self.coupling not in COUPLINGS:
             _bad(f"coupling must be one of {tuple(COUPLINGS)}")
         if self.spin_distribution not in SPIN_DISTRIBUTIONS:
@@ -163,8 +229,17 @@ class SimulationConfig:
 
     @property
     def r_nn(self) -> float:
-        """Mean nearest-neighbour distance of the Poisson process."""
+        """Mean nearest-neighbour distance of the ideal Poisson process at the same density.
+
+        This is the length unit of all reported distances, also for hard-core positions (whose
+        actual mean nearest-neighbour distance is larger).
+        """
         return float(RNN_UNIT_DENSITY * self.density_effective ** (-1.0 / 3.0))
+
+    @property
+    def min_separation(self) -> float:
+        """Hard-core distance ``min_separation_nn * r_nn`` (absolute units; 0 = no hard core)."""
+        return float(self.min_separation_nn * self.r_nn)
 
     @property
     def r_cut_nn_resolved(self) -> float:
@@ -203,7 +278,8 @@ class SimulationConfig:
 
         The time is the sum of the neighbour-list assembly, the sweeps (plus the two energy
         passes), the pair statistics of the initial, final and snapshot states (plus the
-        nearest-neighbour diagnostics if requested) and a small per-particle term.
+        nearest-neighbour diagnostics if requested), a small per-particle term and, with a hard
+        core, the ``O(N^2)`` sequential random addition of the positions (0.2 s at ``N = 5000``).
         """
         edges = self.n_particles * self.neighbors_per_particle  # directed edges
         sweeps = self.n_sweeps + 2
@@ -226,6 +302,8 @@ class SimulationConfig:
             + self.n_particles * _SECONDS_PER_PARTICLE
             + 0.01
         )
+        if self.min_separation_nn > 0.0:
+            seconds += self.n_particles**2 * _SECONDS_PER_HARDCORE_PAIR
         memory_mb = _BASE_MEMORY_MB + edges * _BYTES_PER_EDGE_PEAK / 1e6
         return {"seconds": float(seconds), "memory_mb": float(memory_mb), "edges": float(edges)}
 
@@ -245,15 +323,21 @@ class SimulationConfig:
         known = {f.name for f in dataclasses.fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in known})
 
-    def compat_key(self) -> dict[str, Any]:
+    def compat_key(self, kind: str = "ensemble") -> dict[str, Any]:
         """Everything that determines the *content* of a realization file.
 
         ``n_realizations`` (extend/shrink an ensemble) and ``save_states`` (which realizations
-        also store their particle states) do not change the physics, so they are excluded.
+        also store their particle states) do not change the physics, so they are excluded. The
+        annealing schedule is excluded for a plain quench ensemble (it is never used there);
+        a protocol check (``kind="protocol"``) always anneals one of its variants, so there it
+        is part of the key. ``min_separation_nn`` is part of the key; configurations stored
+        before it existed load with its default 0 (:meth:`from_dict`) and keep matching.
         """
         d = self.to_dict()
         d.pop("n_realizations")
         d.pop("save_states")
+        if kind != "protocol" and self.protocol != "anneal":
+            d.pop("anneal")
         return d
 
     def replace(self, **overrides: Any) -> SimulationConfig:

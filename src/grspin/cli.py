@@ -14,6 +14,7 @@ from .analysis import EnsembleData
 from .config import (
     BOUNDARIES,
     COUPLINGS,
+    MAX_MIN_SEPARATION_NN,
     PROTOCOLS,
     SPIN_DISTRIBUTIONS,
     UPDATE_ORDERS,
@@ -21,6 +22,7 @@ from .config import (
     SimulationConfig,
 )
 from .ensemble import (
+    STATES_DIRNAME,
     ConfigMismatchError,
     available_memory_mb,
     run_ensemble,
@@ -28,7 +30,7 @@ from .ensemble import (
     warmup,
 )
 from .protocols import run_protocol_check
-from .report import analyze_protocol, analyze_run, compare_runs
+from .report import analyze_protocol, analyze_run, compare_runs, structure_factor_comparison
 
 _D = SimulationConfig()  # defaults shown in --help
 _A = AnnealConfig()
@@ -63,10 +65,20 @@ def add_config_arguments(parser: argparse.ArgumentParser) -> None:
         "--boundary", choices=BOUNDARIES, default=_D.boundary, help="(default: %(default)s)"
     )
     g.add_argument(
+        "--min-separation-nn",
+        type=float,
+        default=_D.min_separation_nn,
+        metavar="X",
+        help="hard core: all pair distances >= X r_nn by sequential random addition "
+        f"(0 = ideal Poisson process, at most {MAX_MIN_SEPARATION_NN:g}; default: %(default)s)",
+    )
+    g.add_argument(
         "--coupling",
         choices=tuple(COUPLINGS),
         default=_D.coupling,
-        help="'gr' is the physical interaction; the others are controls (default: %(default)s)",
+        help="'gr' is the physical interaction (sigma = +1, gamma = 3); isotropic_afm and dipolar "
+        "are controls; transverse_only, gamma12 and longitudinal_only (gamma = 1, 12, 100) vary "
+        "the weight of the longitudinal channel (default: %(default)s)",
     )
     g.add_argument(
         "--spin-distribution",
@@ -158,6 +170,7 @@ def config_from_args(args: argparse.Namespace) -> SimulationConfig:
         density=args.density,
         box_length=args.box_length,
         boundary=args.boundary,
+        min_separation_nn=args.min_separation_nn,
         coupling=args.coupling,
         spin_distribution=args.spin_distribution,
         spin_scale=args.spin_scale,
@@ -237,6 +250,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         fit_range=fit_range,
         plots=not args.no_plots,
         formats=tuple(args.formats),
+        landmark_rebin=args.landmark_rebin,
+        show_fit=args.show_fit,
+        sweeps_run=args.sweeps_run,
+        cutoff_run=args.cutoff_run,
+        energy_budget=not args.no_energy_budget,
+        max_states=args.max_states,
     )
     for key, path in written.items():
         print(f"{key:24s} {path}")
@@ -268,6 +287,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         rebin=args.rebin,
         n_boot=args.n_boot,
         formats=tuple(args.formats),
+        landmark_rebin=args.landmark_rebin,
     )
     for key, path in written.items():
         print(f"{key:40s} {path}")
@@ -410,8 +430,19 @@ def cmd_plan_status(args: argparse.Namespace) -> int:
     if stale:
         print(
             f"warning: stored configuration differs from the plan for: {', '.join(stale)} "
-            "(the plan changed after these runs; re-run with --overwrite or use another --root)"
+            "(the plan changed after these runs; `plan run --refresh-stale` recomputes them, "
+            "or use another --root)"
         )
+    if args.provenance:
+        print()
+        print(planmod.provenance_report(plan, root))
+    return 0
+
+
+def cmd_plan_provenance(args: argparse.Namespace) -> int:
+    """Commit, dirty flag and source hash of every entry on disk versus the current tree."""
+    plan = planmod.build_plan(args.smoke)
+    print(planmod.provenance_report(plan, _plan_root(args)))
     return 0
 
 
@@ -429,17 +460,31 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
             print(f"  {s.entry.id:22s} {s.finished}/{s.total} {s.state}")
         return 0
     limit = memory_limit_mb(args)
+    skipped: list[str] = []
     for entry in entries:
         out = planmod.entry_dir(entry, root)
         print(f"\n### {entry.id}: {entry.title}")
+        stale = planmod.entry_status(entry, root).state == "stale-config"
+        if stale and not (args.overwrite or args.refresh_stale):
+            print(
+                f"skip {entry.id}: {out} holds results of a different configuration "
+                "(the plan changed after that run); pass --refresh-stale to recompute it"
+            )
+            skipped.append(entry.id)
+            continue
         runner = run_protocol_check if entry.kind == "protocol" else run_ensemble
         runner(
             entry.config,
             out,
             n_workers=args.workers,
             progress=not args.quiet,
-            overwrite=args.overwrite,
+            overwrite=args.overwrite or stale,
             memory_limit_mb=limit,
+        )
+    if skipped:
+        print(
+            f"\nwarning: {len(skipped)} stale entries were skipped: {', '.join(skipped)} "
+            "(re-run with --refresh-stale)"
         )
     return 0
 
@@ -456,12 +501,75 @@ def _comparison_ready(
     return None
 
 
+def _budget_runs(entry: planmod.PlanEntry, plan: planmod.Plan, root: Path) -> dict[str, Path]:
+    """Runs for the landmark error budget of the main ensemble: ``S1`` (longer relaxation on the same
+    seeds) and ``S2_rc15`` (largest cutoff), when the plan has them and they are at least partly
+    finished. Other entries rely on the sibling search of :func:`grspin.report.analyze_run`."""
+    if entry.id != "M":
+        return {}
+    runs: dict[str, Path] = {}
+    for key, other, attr in (
+        ("sweeps_run", "S1", "n_sweeps"),
+        ("cutoff_run", "S2_rc15", "r_cut_nn_resolved"),
+    ):
+        try:
+            candidate = plan.get(other)
+        except KeyError:
+            continue
+        longer = getattr(candidate.config, attr) > getattr(entry.config, attr)
+        if longer and planmod.entry_status(candidate, root).finished >= 2:
+            runs[key] = planmod.entry_dir(candidate, root)
+    return runs
+
+
+def _structure_factor_entries(plan: planmod.Plan, root: Path) -> list[planmod.PlanEntry]:
+    """The entries of :data:`grspin.plan.STRUCTURE_FACTOR_ENTRIES` that have stored states."""
+    ready = []
+    for sid in planmod.STRUCTURE_FACTOR_ENTRIES:
+        if sid not in plan.ids:
+            continue
+        entry = plan.get(sid)
+        run_dir = planmod.entry_dir(entry, root)
+        has_states = any((run_dir / STATES_DIRNAME).glob("seed_*.npz"))
+        if planmod.entry_status(entry, root).finished >= 1 and has_states:
+            ready.append(entry)
+    return ready
+
+
+def _compare_structure_factors(
+    plan: planmod.Plan, root: Path, max_states: int | None
+) -> Path | None:
+    """``cmp_structure_factor``: S(k) of the far-tail entries and M from their stored states."""
+    ready = _structure_factor_entries(plan, root)
+    if len(ready) < 2:
+        print(
+            f"skip {planmod.STRUCTURE_FACTOR_COMPARISON_ID}: fewer than two of "
+            f"{', '.join(planmod.STRUCTURE_FACTOR_ENTRIES)} have stored states"
+        )
+        return None
+    out = root / "_comparisons" / planmod.STRUCTURE_FACTOR_COMPARISON_ID
+    written = structure_factor_comparison(
+        [planmod.entry_dir(e, root) for e in ready],
+        out,
+        labels=[
+            f"{e.id} (N={e.config.n_particles}, r_cut={e.config.r_cut_nn_resolved:g} r_nn)"
+            for e in ready
+        ],
+        max_states=max_states,
+    )
+    print(
+        f"compared {planmod.STRUCTURE_FACTOR_COMPARISON_ID} -> {written['structure_factor_vs_cutoff'].parent}"
+    )
+    return out
+
+
 def cmd_plan_analyze(args: argparse.Namespace) -> int:
     plan = planmod.build_plan(args.smoke)
     root = _plan_root(args)
     comp_ids = {c.id for c in plan.comparisons}
+    sk_id = planmod.STRUCTURE_FACTOR_COMPARISON_ID
     names = args.targets or ["all"]
-    entry_names = [n for n in names if n not in comp_ids and n != "comparisons"]
+    entry_names = [n for n in names if n not in comp_ids and n not in ("comparisons", sk_id)]
     entries = plan.select(entry_names) if entry_names else []
     comps = [
         c
@@ -477,7 +585,14 @@ def cmd_plan_analyze(args: argparse.Namespace) -> int:
         if entry.kind == "protocol":
             analyze_protocol(planmod.entry_dir(entry, root), out, rebin=entry.rebin)
         else:
-            analyze_run(planmod.entry_dir(entry, root), out, rebin=entry.rebin, n_boot=args.n_boot)
+            analyze_run(
+                planmod.entry_dir(entry, root),
+                out,
+                rebin=entry.rebin,
+                n_boot=args.n_boot,
+                max_states=args.max_states,
+                **_budget_runs(entry, plan, root),
+            )
         print(f"analysed {entry.id} -> {out}")
     for comp in comps:
         missing = _comparison_ready(comp, plan, root, args.allow_partial)
@@ -499,6 +614,13 @@ def cmd_plan_analyze(args: argparse.Namespace) -> int:
             n_boot=args.n_boot,
         )
         print(f"compared {comp.id} -> {out}")
+    # S(k) versus cutoff and size needs stored states, not finished realizations: it is wanted
+    # with everything, with the comparisons, with the far-tail group or by its own id / members.
+    wanted = not args.targets or any(
+        n in names for n in ("all", "comparisons", "T", sk_id, *planmod.STRUCTURE_FACTOR_ENTRIES)
+    )
+    if wanted:
+        _compare_structure_factors(plan, root, args.max_states)
     return 0
 
 
@@ -546,10 +668,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="merge this many neighbouring bins (must divide n_bins)",
     )
     p.add_argument("--n-boot", type=int, default=200, help="bootstrap resamples over realizations")
-    p.add_argument("--no-fit", action="store_true")
+    p.add_argument(
+        "--landmark-rebin",
+        type=int,
+        default=1,
+        help="rebin factor of the quoted landmarks (evaluated on x_mean; default: %(default)s)",
+    )
+    p.add_argument(
+        "--sweeps-run",
+        metavar="DIR",
+        help="paired run with more sweeps for the error budget (default: search sibling dirs)",
+    )
+    p.add_argument(
+        "--cutoff-run",
+        metavar="DIR",
+        help="paired run with a larger cutoff for the error budget (default: search sibling dirs)",
+    )
+    p.add_argument("--no-fit", action="store_true", help="skip the damped-oscillatory fit")
     p.add_argument("--fit-range", type=float, nargs=2, metavar=("XMIN", "XMAX"))
+    p.add_argument(
+        "--show-fit", action="store_true", help="draw the fit curve in the figures (off by default)"
+    )
     p.add_argument("--no-plots", action="store_true")
     p.add_argument("--formats", nargs="+", default=["pdf"], help="figure formats (default: pdf)")
+    p.add_argument(
+        "--no-energy-budget",
+        action="store_true",
+        help="skip the energy budget / frustration index of the stored states",
+    )
+    p.add_argument(
+        "--max-states",
+        type=int,
+        metavar="INT",
+        help="use at most this many stored states for S(k), the energy budget and the dimer map "
+        "fallback (default: all)",
+    )
     p.set_defaults(func=cmd_analyze)
 
     p = sub.add_parser(
@@ -561,8 +714,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="run directories; use DIR:K for the first K realizations; first = reference",
     )
     p.add_argument("--labels", nargs="+")
-    p.add_argument("--obs", nargs="+", default=["C", "Q", "A"], choices=["C", "Q", "A", "P", "B"])
+    p.add_argument(
+        "--obs",
+        nargs="+",
+        default=["C", "Q", "A"],
+        choices=["C", "Q", "A", "P", "Cperp", "B"],
+        help="observables of the overlay figure and the bin-wise differences",
+    )
     p.add_argument("--rebin", type=int, default=1)
+    p.add_argument(
+        "--landmark-rebin", type=int, default=1, help="rebin factor of the landmark tables"
+    )
     p.add_argument("--n-boot", type=int, default=200)
     p.add_argument("--formats", nargs="+", default=["pdf"])
     p.add_argument("--out", required=True)
@@ -603,7 +765,17 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser("list", "all entries with their estimated cost", cmd_plan_list)
     q = plan_parser("show", "details of entries/groups", cmd_plan_show)
     q.add_argument("ids", nargs="+")
-    plan_parser("status", "progress of every entry, from the files on disk", cmd_plan_status)
+    q = plan_parser("status", "progress of every entry, from the files on disk", cmd_plan_status)
+    q.add_argument(
+        "--provenance",
+        action="store_true",
+        help="also print the provenance table (see 'provenance')",
+    )
+    plan_parser(
+        "provenance",
+        "commit, dirty flag and source hash that produced every entry, versus the current tree",
+        cmd_plan_provenance,
+    )
     q = plan_parser(
         "run",
         "run entries (default: the required ones); finished realizations are skipped",
@@ -612,15 +784,30 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("targets", nargs="*", help="ids, groups (S2), required | recommended | all")
     add_execution_arguments(q)
     q.add_argument("--dry-run", action="store_true")
-    q.add_argument("--overwrite", action="store_true")
+    q.add_argument(
+        "--overwrite", action="store_true", help="discard the existing realizations of the targets"
+    )
+    q.add_argument(
+        "--refresh-stale",
+        action="store_true",
+        help="recompute (only) the targets whose stored configuration differs from the plan; "
+        "without it they are skipped with a warning",
+    )
     q = plan_parser("analyze", "analyse finished entries and comparisons", cmd_plan_analyze)
     q.add_argument(
         "targets",
         nargs="*",
-        help="ids, groups, comparison ids (cmp_*), 'comparisons' or nothing for everything",
+        help="ids, groups, comparison ids (cmp_*, including cmp_structure_factor), 'comparisons' "
+        "or nothing for everything",
     )
     q.add_argument("--n-boot", type=int, default=200)
     q.add_argument("--allow-partial", action="store_true", help="also analyse unfinished entries")
+    q.add_argument(
+        "--max-states",
+        type=int,
+        metavar="INT",
+        help="use at most this many stored states per entry for S(k) and the energy budget",
+    )
     q = psub.add_parser("markdown", help="print (or write) docs/SIMULATION_PLAN.md")
     q.add_argument("--write", metavar="PATH")
     q.set_defaults(func=cmd_plan_markdown)

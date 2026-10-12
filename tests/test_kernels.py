@@ -193,7 +193,9 @@ def test_annealing_protocol_reaches_low_energies_and_keeps_magnitudes():
     res_q = relax(spins0, smag, nl, quench, seed=3)
     res_a = relax(spins0, smag, nl, anneal, seed=3)
     assert np.allclose(np.linalg.norm(res_a.spins, axis=1), smag)
-    assert 0.0 < res_a.anneal_acceptance < 1.0
+    acc = res_a.anneal_acceptance_per_T
+    assert acc.shape == (12,) and np.all((acc > 0.0) & (acc < 1.0))
+    assert acc[0] > acc[-1] == res_a.anneal_acceptance_final  # hot: nearly all accepted
     # the annealed state is already deep before the final greedy stage, and the two protocols
     # end at comparable (not identical) low energies
     assert res_a.energy[0] < 0.8 * res_q.energy[-1] < 0.0

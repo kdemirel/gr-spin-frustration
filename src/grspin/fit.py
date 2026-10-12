@@ -1,11 +1,13 @@
 """Damped-oscillatory description of ``C(r)`` and its bootstrap uncertainty.
 
 ``C_fit(r) = -exp(-alpha u^3) cos(k u + phi)`` with ``u = rho^(1/3) r = RNN_UNIT_DENSITY * x`` and
-``x = r / r_nn``. This is a *phenomenological* form: it captures the negative core, the sign change
-and the positive lobe, but with sizeable systematic residuals, and its parameters are not
-individually well determined (the ``chi^2`` surface has several nearby minima). Hence the fit uses a
-multi-start search and reports bootstrap percentiles; model-independent landmarks
-(:meth:`grspin.analysis.EnsembleData.landmarks`) should be preferred for quantitative statements.
+``x = r / r_nn``. This is a *phenomenological guide*, not used for quantitative statements: it
+captures the negative core, the sign change and the positive lobe of truncated-interaction curves,
+but the relaxed ``C(r)`` of the full interaction shows no oscillation, the residuals are systematic
+and the parameters are not individually well determined (the ``chi^2`` surface has several nearby
+minima). Hence the fit uses a multi-start search and reports bootstrap percentiles; it is written to
+``fit.json`` but not drawn unless requested, and the model-independent landmarks
+(:meth:`grspin.analysis.EnsembleData.landmarks`) are what the manuscript quotes.
 """
 
 from __future__ import annotations
@@ -148,12 +150,23 @@ def fit_ensemble(
     n_boot: int = 200,
     seed: int = 12345,
 ) -> dict:
-    """Fit the ensemble-mean ``C(x)`` and bootstrap the parameters over realizations."""
-    x = data.x_center(rebin)
+    """Fit the ensemble-mean ``C(x)`` and bootstrap the parameters over realizations.
+
+    The curve is evaluated on the pair-weighted mean distance ``x_mean`` of each bin (as the
+    landmarks are); ``result["abscissa"]`` records it.
+    """
+    abscissa = "x_mean"
+    x = data.abscissa(rebin, abscissa)
     per_real = data.realization_means("C", "final", rebin)
     mean, sem, _ = mean_sem(per_real)
     best = fit_damped_oscillatory(x, mean, sem, x_range)
-    result: dict = {"fit": best.as_dict(), "rebin": rebin, "n_real": data.n_real, "n_boot": n_boot}
+    result: dict = {
+        "fit": best.as_dict(),
+        "rebin": rebin,
+        "abscissa": data.abscissa_used(abscissa),
+        "n_real": data.n_real,
+        "n_boot": n_boot,
+    }
     if not best.success or n_boot < 2:
         return result
     starts = [(best.alpha, best.k, best.phi), *_BOOTSTRAP_EXTRA_STARTS]

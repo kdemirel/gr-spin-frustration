@@ -19,6 +19,9 @@ from grspin.ensemble import (
     seed_path,
     state_path,
 )
+from grspin.neighbors import build_tree
+from grspin.nn import mutual_nn_partners
+from grspin.observables import dimer_frame_map
 
 _VOLATILE = ("elapsed_s", "timing_s")
 
@@ -28,7 +31,8 @@ def _same(a, b):
     for key in a:
         if key in _VOLATILE:
             continue
-        assert np.array_equal(a[key], b[key], equal_nan=True), key
+        numeric = np.issubdtype(np.asarray(a[key]).dtype, np.number)  # provenance stamps are text
+        assert np.array_equal(a[key], b[key], equal_nan=numeric), key
 
 
 def test_record_is_internally_consistent(small_config):
@@ -132,3 +136,43 @@ def test_memory_limit_caps_the_workers_of_a_run(tmp_path, small_config):
         small_config, tmp_path / "run", n_workers=4, progress=False, memory_limit_mb=1.0
     )
     assert info.n_workers == 1
+
+
+def test_dimer_map_is_stored_with_the_nn_diagnostics(small_config, tiny_run):
+    rec, _ = run_realization(small_config, seed=5)
+    assert not any(key.startswith("dimer_") for key in rec)  # only with nn_diagnostics=True
+    cfg, out = tiny_run
+    rec = load_record(seed_path(out, cfg.seeds[0]))
+    assert rec["dimer_map_cnt"].shape == (50, 25) and rec["dimer_ang_cnt"].shape == (6, 7)
+    for key in ("dimer_map_sum_C", "dimer_map_sum_P"):
+        assert rec[key].shape == (50, 25) and rec[key].dtype == np.float64
+    assert rec["dimer_map_cnt"].dtype == np.int64 and rec["dimer_map_cnt"].sum() > 0
+    assert rec["dimer_map_r_max"] == 2.5
+    assert rec["dimer_map_n_spins"] == pytest.approx(rec["nn_frac_mutual"] * cfg.n_particles)
+    assert 0 < rec["dimer_ang_cnt"].sum() <= rec["dimer_map_cnt"].sum()  # x < 0.5 only in the map
+    assert np.abs(rec["dimer_map_sum_C"]).max() <= rec["dimer_map_cnt"].max()
+    # the dimer-field test is stored with the run's coupling (gr: sigma = 1, gamma = 3)
+    assert rec["dimer_field_cnt"].shape == (6,) and rec["dimer_ang_sum_Cpred"].shape == (6, 7)
+    assert rec["dimer_field_sigma"] == 1.0 and rec["dimer_field_gamma"] == 3.0
+    assert rec["dimer_field_cnt"].sum() == rec["dimer_ang_cnt"].sum()  # every prediction defined
+    assert (
+        0 < rec["dimer_field_agree"].sum() <= rec["dimer_field_cnt"].sum() <= rec["dimer_field_n"]
+    )
+    assert rec["dimer_field_n_agree"] / rec["dimer_field_n"] > 0.6  # relaxed: well above chance
+    assert np.abs(rec["dimer_ang_sum_Cpred"]).max() <= rec["dimer_ang_cnt"].max()
+    # the record is reproduced from the stored state of the same seed
+    state = load_record(state_path(out, cfg.seeds[0]))
+    tree = build_tree(state["positions"], cfg.box)
+    partner = mutual_nn_partners(state["positions"], tree)
+    again = dimer_frame_map(
+        state["positions"],
+        state["spins_final"],
+        tree,
+        cfg.box,
+        cfg.r_nn,
+        partner,
+        sigma_gamma=cfg.sigma_gamma,
+    )
+    assert set(again) == {key for key in rec if key.startswith("dimer_")}
+    for key, value in again.items():
+        assert np.allclose(value, rec[key], atol=1e-12), key

@@ -55,3 +55,16 @@ def test_ensemble_fit_with_bootstrap_on_a_synthetic_ensemble():
         assert boot["p16"] <= boot["median"] <= boot["p84"] and boot["std"] >= 0.0
     restricted = fit_ensemble(data, rebin=2, x_range=(0.2, 3.0), n_boot=0)
     assert restricted["fit"]["success"] and "alpha_bootstrap" not in restricted
+
+
+def test_ensemble_fit_is_evaluated_on_the_pair_weighted_mean_distance():
+    data, _, x = synthetic_ensemble(n_real=20, noise=1e-3, params=(2.7, 2.9, 0.1))
+    base = fit_ensemble(data, n_boot=0)
+    assert base["abscissa"] == "x_mean" and base["fit"]["phi"] == pytest.approx(0.1, abs=0.02)
+    data.arrays["fin_sum_x"] = data.arrays["fin_cnt_C"] * (x + 0.05)  # pairs sit beyond the centres
+    shifted = fit_ensemble(data, n_boot=0)
+    assert shifted["fit"]["success"]  # the fit used x_mean: the phase and chi2 must change
+    assert abs(shifted["fit"]["phi"] - base["fit"]["phi"]) > 1e-3
+    assert shifted["fit"]["chi2"] > 10.0 * base["fit"]["chi2"]
+    del data.arrays["fin_sum_x"]
+    assert fit_ensemble(data, n_boot=0)["abscissa"] == "x_center"

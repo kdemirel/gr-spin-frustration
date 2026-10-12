@@ -14,8 +14,8 @@ authors:
 repository-code: "https://github.com/kdemirel/gr-spin-frustration"
 url: "https://github.com/kdemirel/gr-spin-frustration"
 license: MIT
-version: 0.1.0
-date-released: 2026-10-06
+version: 0.2.0
+date-released: 2026-10-10
 keywords:
   - general relativity
   - spin-spin interaction

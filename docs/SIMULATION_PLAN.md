@@ -9,10 +9,13 @@ Everything the manuscript needs, as a checklist. `grspin plan status` shows the 
 
 - Periodic boundaries (minimum image), Poisson positions at unit density, GR coupling, spin lengths `U(0, S)`, sequential greedy relaxation of 100 sweeps - unless an entry says otherwise.
 - Distances are in units of the mean nearest-neighbour distance `r_nn = Gamma(4/3) (3/(4 pi rho))^(1/3)`.
-- 80 radial bins on `[0, 4] r_nn` are stored; the analysis re-bins by 2 to the 40 bins quoted in the paper (and allows 1, 2, 4, 8 for the binning check).
-- Every set starts at seed 1000. Sets with the same system share realizations (identical positions and initial directions), so their differences are *paired* and much less noisy than the individual curves.
+- 80 radial bins on `[0, 4] r_nn` are stored; the analysis re-bins by 2 to the 40 bins quoted in the paper (and allows 1, 2, 4, 8 for the binning check). The far-tail set `T` stores 200 bins on `[0, 10] r_nn`.
+- Every set starts at seed 1000. Sets with the same system share realizations (identical positions and initial directions), so their differences are *paired* and much less noisy than the individual curves; comparisons across different `N` or different position processes (the hard-core set `S8`, whose positions come from sequential random addition with all pair distances >= 0.5 r_nn) are unpaired.
+- Couplings: `gr` (sigma = +1, gamma = 3) unless stated; the controls `S6` reverse the sign or drop the tensor, the channel family `S7` keeps sigma = +1 and varies gamma (1: transverse channel only, 12: longitudinal : transverse = 11 : 1, 100: longitudinal only to 1 %; the overall scale of `H` is irrelevant at T = 0).
+- Stored particle states: 48 for `M`, 16 for `S6`, `S7`, `S8` and `T` (energy budget, dimer-field test, `S(k)`), none elsewhere.
 - Results go to `results/<id>/` (git-ignored); smoke tests to `results/_smoke/`.
-- Run times are single-core estimates from the cost model in `config.py` (fitted to `grspin benchmark` measurements; check it on your machine); divide by the number of cores. Memory is per worker; `grspin plan run` limits the workers to half of the RAM by default (`--max-memory-gb`).
+- Run times are single-core estimates from the cost model in `config.py` (fitted to `grspin benchmark` measurements; check it on your machine); divide by the number of cores. Memory is per worker; `grspin plan run` limits the workers to half of the RAM by default (`--max-memory-gb`): `T_N10000_rc15` (~5.5 GB) runs with a single worker on a 16 GB machine.
+- Protocol checks (`S5`) anneal from `t_start = 10 G S^2 rho` (above the typical dimer binding energy 2.9) to 0.01 over 40 temperatures and record the acceptance rate at every temperature.
 
 ## Overview
 
@@ -43,12 +46,21 @@ Everything the manuscript needs, as a checklist. `grspin plan status` shows the 
 | `S4_lognormal` | recommended | N=5000, periodic, r_cut=10 r_nn, 100 sweeps, s~lognormal | 100 | 3 core-min | 1033 MB |
 | `S6_isotropic_afm` | recommended | N=5000, periodic, r_cut=10 r_nn, 100 sweeps, coupling=isotropic_afm | 100 | 3 core-min | 1033 MB |
 | `S6_dipolar` | recommended | N=5000, periodic, r_cut=10 r_nn, 100 sweeps, coupling=dipolar | 100 | 3 core-min | 1033 MB |
+| `S7_gamma1` | recommended | N=5000, periodic, r_cut=10 r_nn, 100 sweeps, coupling=transverse_only | 100 | 3 core-min | 1033 MB |
+| `S7_gamma12` | recommended | N=5000, periodic, r_cut=10 r_nn, 100 sweeps, coupling=gamma12 | 100 | 3 core-min | 1033 MB |
+| `S7_gamma100` | recommended | N=5000, periodic, r_cut=10 r_nn, 100 sweeps, coupling=longitudinal_only | 100 | 3 core-min | 1033 MB |
+| `S8_hardcore05` | optional | N=5000, periodic, r_cut=10 r_nn, 100 sweeps, r_min=0.5 r_nn | 100 | 3 core-min | 1033 MB |
+| `T_N10000_rc7` | recommended | N=10000, periodic, r_cut=7 r_nn, 100 sweeps, x_max=10 r_nn | 32 | 2 core-min | 787 MB |
+| `T_N10000_rc10` | recommended | N=10000, periodic, r_cut=10 r_nn, 100 sweeps, x_max=10 r_nn | 32 | 3 core-min | 1817 MB |
+| `T_N10000_rc15` | recommended | N=10000, periodic, r_cut=15 r_nn, 100 sweeps, x_max=10 r_nn | 32 | 7 core-min | 5537 MB |
+| `T_N20000_rc10` | recommended | N=20000, periodic, r_cut=10 r_nn, 100 sweeps, x_max=10 r_nn | 32 | 6 core-min | 3383 MB |
+| `S5_N5000` | recommended | N=5000, periodic, r_cut=10 r_nn, 100 sweeps, anneal 10 sweeps/T | 48 | 9 core-min | 1033 MB |
 | `S5_protocol_short` | optional | N=1000, periodic, r_cut=8 r_nn, 100 sweeps, anneal 10 sweeps/T | 32 | 40 core-s | 330 MB |
 | `S5_protocol_long` | optional | N=1000, periodic, r_cut=8 r_nn, 100 sweeps, anneal 100 sweeps/T | 16 | 83 core-s | 330 MB |
 
 - **required**: 20 runs, 1480 realizations, 0.45 core-hours (about 3 min on 8 cores), largest worker ~2894 MB
-- **recommended**: 25 runs, 1980 realizations, 0.70 core-hours (about 5 min on 8 cores), largest worker ~2894 MB
-- **all**: 27 runs, 2028 realizations, 0.73 core-hours (about 6 min on 8 cores), largest worker ~2894 MB
+- **recommended**: 33 runs, 2456 realizations, 1.31 core-hours (about 10 min on 8 cores), largest worker ~5537 MB
+- **all**: 36 runs, 2604 realizations, 1.40 core-hours (about 10 min on 8 cores), largest worker ~5537 MB
 
 ## Checklist: simulations
 
@@ -56,8 +68,8 @@ Everything the manuscript needs, as a checklist. `grspin plan status` shows the 
 
 **M - Main ensemble** - run all: `grspin plan run M`
 
-- purpose: C(r), Q(r), A(r), B(r) with error bars; landmarks, bootstrap fit, nearest-neighbour diagnostics, S(0); the headline result.
-- feeds: Main-text figures of C(r) and Q(r); numbers quoted in the text; SM tables.
+- purpose: C(r), P(r), Cperp(r), Q(r), A(r), B(r) with error bars; landmarks with their error budget, nearest-neighbour diagnostics, the dimer-frame correlation map, S(0) and S(k) from 48 stored states; the headline result.
+- feeds: Main-text figures of C(r), its channel decomposition and the dimer-frame map; numbers quoted in the text; SM tables.
 - [ ] `M`: 200 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps) - 6 core-min
 
 **S1 - Relaxation sweeps** - run all: `grspin plan run S1`
@@ -99,27 +111,53 @@ Everything the manuscript needs, as a checklist. `grspin plan status` shows the 
 **S4 - Spin-magnitude distribution** - run all: `grspin plan run S4`
 
 - purpose: Is the correlation structure independent of the distribution of spin lengths? Baseline: the first 100 seeds of M (U(0, S)).
-- feeds: SM: spin-magnitude distribution (Q is the only observable that depends on it).
+- feeds: SM: spin-magnitude distribution. The sign pattern (P < 0, Cperp > 0) and the transverse maximum (Cperp 0.44-0.45) are robust, but the landmarks of C(r) shift: x_0 = 0.747 (lognormal), 0.844 (U(0, S)), 0.880 (U(S/2, 3S/2)), 0.890 (equal); Q depends on the lengths through |S_i + S_j| and is undefined for equal lengths.
 - [ ] `S4_equal`: 100 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps, s~equal) - 3 core-min
 - [ ] `S4_uniform_half`: 100 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps, s~uniform_half) - 3 core-min
 - [ ] `S4_lognormal`: 100 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps, s~lognormal) - 3 core-min
 
 **S6 - Control couplings** - run all: `grspin plan run S6`
 
-- purpose: Same geometry and seeds as M with the isotropic 1/r^3 antiferromagnet (no tensor structure): shows which features are specific to the GR tensor.
-- purpose: Same geometry and seeds as M with the sign-reversed tensor, i.e. a dipolar ferromagnet: shows which features are specific to the GR tensor.
+- purpose: Same geometry and seeds as M with the isotropic 1/r^3 antiferromagnet (no tensor structure): shows which features are specific to the GR tensor. 16 stored states feed the energy budget (frustration index with the two-body minimum of the control coupling) and S(k).
+- purpose: Same geometry and seeds as M with the sign-reversed tensor, i.e. a dipolar ferromagnet: shows which features are specific to the GR tensor. 16 stored states feed the energy budget (frustration index with the two-body minimum of the control coupling) and S(k).
 - feeds: Main text or SM: control experiments.
 - [ ] `S6_isotropic_afm`: 100 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps, coupling=isotropic_afm) - 3 core-min
 - [ ] `S6_dipolar`: 100 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps, coupling=dipolar) - 3 core-min
 
-### Optional
+**S7 - Channel controls (gamma family)** - run all: `grspin plan run S7`
+
+- purpose: Channel controls: which channel carries the positive shell? sigma = +1 with gamma = 1 (transverse channel only), 12 (longitudinal : transverse = 11 : 1) and 100 (longitudinal channel only up to a 1 % transverse admixture; the overall scale of H is irrelevant at T = 0) on the geometry and seeds of M, whose GR coupling gamma = 3 (weights 2 : 1) completes the family.
+- feeds: Main text or SM: channel controls - the landmarks x_0, C_peak, x_peak, Cperp_max, Q_min and the sign of C at 1.2 r_nn against gamma, and C, P, Cperp of the four couplings in one figure; the nn diagnostics record the dimer map, the 16 stored states feed the energy budget and the dimer-field test.
+- [ ] `S7_gamma1`: 100 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps, coupling=transverse_only) - 3 core-min
+- [ ] `S7_gamma12`: 100 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps, coupling=gamma12) - 3 core-min
+- [ ] `S7_gamma100`: 100 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps, coupling=longitudinal_only) - 3 core-min
+
+**T - Far tail and cutoff** - run all: `grspin plan run T`
+
+- purpose: far tail of C, P, Cperp out to 10 r_nn and its cutoff dependence (the negative far-tail dip is a truncation effect whose position scales with r_cut); 16 stored states per entry for S(k) at the smallest wavevectors versus r_cut and for the energy budget
+- feeds: SM: far tail and truncation; justifies quoting C(r) for x <= 4 at r_cut = 10 r_nn.
+- [ ] `T_N10000_rc7`: 32 x (N=10000, periodic, r_cut=7 r_nn, 100 sweeps, x_max=10 r_nn) - 2 core-min
+- [ ] `T_N10000_rc10`: 32 x (N=10000, periodic, r_cut=10 r_nn, 100 sweeps, x_max=10 r_nn) - 3 core-min
+- [ ] `T_N10000_rc15`: 32 x (N=10000, periodic, r_cut=15 r_nn, 100 sweeps, x_max=10 r_nn) - 7 core-min
+- [ ] `T_N20000_rc10`: 32 x (N=20000, periodic, r_cut=10 r_nn, 100 sweeps, x_max=10 r_nn) - 6 core-min
 
 **S5 - Protocol / metastability check** - run all: `grspin plan run S5`
 
-- purpose: Do random update order, other initial conditions or Metropolis annealing change the relaxed state? Paired energies, overlaps and correlation curves.
+- purpose: Do random update order, other initial conditions or Metropolis annealing change the relaxed state? Paired energies, overlaps and correlation curves. Same system and seeds as M, so the comparison is paired at the precision of the main result.
+- purpose: Do random update order, other initial conditions or Metropolis annealing change the relaxed state? Paired energies, overlaps and correlation curves. Small system (N = 1000) with short and long annealing.
+- feeds: SM table: protocol independence of the landmarks (energies, overlaps, Delta C) at N = 5000; the per-temperature acceptance of the annealing stage.
 - feeds: SM / one sentence: low-energy metastable state, protocol independence.
-- [ ] `S5_protocol_short`: 32 x (N=1000, periodic, r_cut=8 r_nn, 100 sweeps, anneal 10 sweeps/T) - 40 core-s
-- [ ] `S5_protocol_long`: 16 x (N=1000, periodic, r_cut=8 r_nn, 100 sweeps, anneal 100 sweeps/T) - 83 core-s
+- [ ] `S5_N5000`: 48 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps, anneal 10 sweeps/T) - 9 core-min
+- [ ] `S5_protocol_short` (optional): 32 x (N=1000, periodic, r_cut=8 r_nn, 100 sweeps, anneal 10 sweeps/T) - 40 core-s
+- [ ] `S5_protocol_long` (optional): 16 x (N=1000, periodic, r_cut=8 r_nn, 100 sweeps, anneal 100 sweeps/T) - 83 core-s
+
+### Optional
+
+**S8 - Hard-core positions (minimum separation)** - run all: `grspin plan run S8`
+
+- purpose: Hard-core positions: sequential random addition with all pair distances >= 0.5 r_nn removes the closest pairs (which dominate the mean energy) and changes the dimer statistics (the Poisson formulas f_m(r) and 16/27 do not apply). Which features survive: the channel signs P < 0 and Cperp > 0, the positive shell, x_0? The positions differ from M, so the comparison is unpaired.
+- feeds: SM: hard-core ensemble; tests the claim that the channel structure is universal while the Poisson numbers (dimer fraction, landmarks) are not.
+- [ ] `S8_hardcore05`: 100 x (N=5000, periodic, r_cut=10 r_nn, 100 sweeps, r_min=0.5 r_nn) - 3 core-min
 
 ## Checklist: analysis
 
@@ -131,37 +169,63 @@ Per-run analysis (tables, landmarks with bootstrap errors, fit, figures) is writ
 - [ ] analyse **S3**: `grspin plan analyze S3`
 - [ ] analyse **S4**: `grspin plan analyze S4`
 - [ ] analyse **S6**: `grspin plan analyze S6`
+- [ ] analyse **S7**: `grspin plan analyze S7`
+- [ ] analyse **S8**: `grspin plan analyze S8`
+- [ ] analyse **T**: `grspin plan analyze T`
 - [ ] analyse **S5**: `grspin plan analyze S5`
 
 - [ ] comparison `cmp_cutoff` - Cutoff dependence (reference: the largest cutoff): `grspin plan analyze cmp_cutoff`
-  - members: `S2_rc15`, `S2_rc12`, `M` (first 48), `S2_rc7p5`, `S2_rc5`, `S2_rc4`, `S2_rc3`
+  - members: `S2_rc15`, `S2_rc12`, `M` (first 48), `S2_rc7p5`, `S2_rc5`, `S2_rc4`, `S2_rc3`; observables: C, Q, A
   - feeds: SM: cutoff dependence.
 - [ ] comparison `cmp_size_periodic` - Finite-size dependence, periodic boundaries (reference: largest N): `grspin plan analyze cmp_size_periodic`
-  - members: `S3_N20000_periodic`, `S3_N10000_periodic`, `S3_N5000_periodic`, `S3_N2000_periodic`, `S3_N1000_periodic`, `S3_N500_periodic`
+  - members: `S3_N20000_periodic`, `S3_N10000_periodic`, `S3_N5000_periodic`, `S3_N2000_periodic`, `S3_N1000_periodic`, `S3_N500_periodic`; observables: C, Q, A
   - feeds: SM: finite-size scaling.
 - [ ] comparison `cmp_size_open` - Finite-size dependence, open boundaries (reference: largest N): `grspin plan analyze cmp_size_open`
-  - members: `S3_N20000_open`, `S3_N10000_open`, `S3_N5000_open`, `S3_N2000_open`, `S3_N1000_open`, `S3_N500_open`
+  - members: `S3_N20000_open`, `S3_N10000_open`, `S3_N5000_open`, `S3_N2000_open`, `S3_N1000_open`, `S3_N500_open`; observables: C, Q, A
   - feeds: SM: finite-size scaling.
 - [ ] comparison `cmp_boundary_N1000` - Open versus periodic boundaries at N = 1000 (paired): `grspin plan analyze cmp_boundary_N1000`
-  - members: `S3_N1000_periodic`, `S3_N1000_open`
+  - members: `S3_N1000_periodic`, `S3_N1000_open`; observables: C, Q, A
   - feeds: SM: boundary effects.
 - [ ] comparison `cmp_boundary_N5000` - Open versus periodic boundaries at N = 5000 (paired): `grspin plan analyze cmp_boundary_N5000`
-  - members: `S3_N5000_periodic`, `S3_N5000_open`
+  - members: `S3_N5000_periodic`, `S3_N5000_open`; observables: C, Q, A
   - feeds: SM: boundary effects.
 - [ ] comparison `cmp_spin_distribution` - Spin-magnitude distribution (reference: U(0, S), first 100 seeds of M): `grspin plan analyze cmp_spin_distribution`
-  - members: `M` (first 100), `S4_equal`, `S4_uniform_half`, `S4_lognormal`
+  - members: `M` (first 100), `S4_equal`, `S4_uniform_half`, `S4_lognormal`; observables: C, Q, A
   - feeds: SM: spin-magnitude distribution.
 - [ ] comparison `cmp_controls` - Control couplings (reference: GR tensor, first 100 seeds of M): `grspin plan analyze cmp_controls`
-  - members: `M` (first 100), `S6_isotropic_afm`, `S6_dipolar`
+  - members: `M` (first 100), `S6_isotropic_afm`, `S6_dipolar`; observables: C, Q, A
   - feeds: Controls: which features need the GR tensor?
+- [ ] comparison `cmp_channels` - Channel controls gamma = 1, 3, 12, 100 (reference: GR, gamma = 3, first 100 seeds of M; paired): `grspin plan analyze cmp_channels`
+  - members: `M` (first 100), `S7_gamma1`, `S7_gamma12`, `S7_gamma100`; observables: C, P, Cperp, Q, A
+  - feeds: Channel controls: which channel carries the positive shell?
+- [ ] comparison `cmp_hardcore` - Hard-core positions versus the Poisson process (reference: M; unpaired, the positions differ): `grspin plan analyze cmp_hardcore`
+  - members: `M`, `S8_hardcore05`; observables: C, P, Cperp, Q, A
+  - feeds: SM: hard-core ensemble - channel signs, positive shell and x_0 without the closest pairs.
+- [ ] comparison `cmp_far_tail` - Far tail versus cutoff at N = 10000 (reference: r_cut = 15 r_nn, paired): `grspin plan analyze cmp_far_tail`
+  - members: `T_N10000_rc15`, `T_N10000_rc10`, `T_N10000_rc7`; observables: C, P, Cperp
+  - feeds: SM: the far-tail dip moves with r_cut (truncation effect); C, P, Cperp on [0, 10].
+- [ ] comparison `cmp_far_tail_size` - Far tail versus system size at r_cut = 10 r_nn (reference: N = 20000, unpaired): `grspin plan analyze cmp_far_tail_size`
+  - members: `T_N20000_rc10`, `T_N10000_rc10`; observables: C, P, Cperp
+  - feeds: SM: the far tail is N-independent at fixed r_cut.
+- [ ] comparison `cmp_structure_factor` - S(k) at the smallest wavevectors versus cutoff and system size, from the stored states: `grspin plan analyze cmp_structure_factor`
+  - members: `T_N10000_rc7`, `T_N10000_rc10`, `T_N10000_rc15`, `T_N20000_rc10`, `M` (those with stored states; at least two); outputs structure_factor_vs_cutoff.csv, structure_factor_comparison.pdf / .md
+  - feeds: SM: is the intermediate-scale feature of S(k) a cutoff artefact, a box effect or real? (compare r_cut = 7, 10, 15 r_nn at N = 10000 and N = 10000 versus 20000)
 
-- [ ] **S7** - Nearest-neighbour diagnostics, S(0), tensor correlations, binning check (needs `M`; no new simulation)
+- [ ] **D1** - Nearest-neighbour diagnostics, S(0), tensor correlations, binning check (needs `M`; no new simulation)
   - how: `grspin plan analyze M` writes nn_*.csv, small_r.csv and summary.json; for the binning check run `grspin analyze results/M --rebin R --out results/M/analysis_rebin_R` with R = 1, 2, 4, 8.
   - feeds: SM: nearest-neighbour diagnostics and binning; main text: dimer picture.
+- [ ] **D2** - Error budget of the landmarks, dimer-frame correlation map, spin structure factor, energy budget (needs `M`, `S1`, `S2_rc15`, `S6_isotropic_afm`, `S6_dipolar`, `T_N10000_rc15`; no new simulation)
+  - how: `grspin plan analyze M` writes error_budget.csv (statistical, binning, sweeps and cutoff terms from the paired runs S1 and S2_rc15), dimer_map.csv / dimer_angular.csv / dimer_map.pdf (from the nn diagnostics of M), structure_factor.csv / .pdf and energy_budget.csv / .json (dimer share, realized fraction and the frustration index E / sum of two-body minima, from the stored states; the same files for every run with states, so S6, S7, S8 and T give the index with their own coupling). `grspin plan analyze T M` (or `comparisons`) writes `cmp_structure_factor`: structure_factor_vs_cutoff.csv, structure_factor_comparison.pdf / .md with S(0), the first three shells and the maximum of S(k) for T_N10000_rc7, T_N10000_rc10, T_N10000_rc15, T_N20000_rc10, M (needs stored states of at least two).
+  - feeds: Main text: landmark errors and the dimer-frame map (mechanism); SM: S(k) versus r_cut and N, the energy budget and frustration index of GR and of the controls.
+- [ ] **D3** - Channel controls and dimer-field test (needs `M`, `S7_gamma1`, `S7_gamma12`, `S7_gamma100`; no new simulation)
+  - how: `grspin plan analyze S7 cmp_channels` writes the per-run analyses of the gamma family and the paired comparison with M: the landmarks x_0, C_peak, x_peak, Cperp_max, Q_min and the sign of C at 1.2 r_nn against gamma = 1, 3, 12, 100, and C, P, Cperp of the four couplings in one figure. The dimer-field test (does the field of the two dimer spins alone predict the direction of a third spin? agreement fraction per distance bin, random = 1/2, and the dimer-only prediction next to the measured angular table) comes from the nn diagnostics of M and of the S7 runs (dimer_field.csv, a column of dimer_angular.csv and a summary.md section).
+  - feeds: Main text: the positive shell is carried by the transverse channel if it survives gamma = 1 and vanishes for gamma = 100, and the causal dimer-field test; SM: the gamma family (landmarks against gamma).
 
 ## Checklist: before submitting
 
-- [ ] all required runs finished with the final code version (`git tag` the commit; the commit hash is stored in every `config.json`)
+- [ ] commit the final code (`git status` clean under `src/grspin`) and tag it (`git tag vX.Y.Z` with the version in `pyproject.toml`)
+- [ ] run the plan from that clean tree: `grspin plan run all` (finished realizations are kept; entries whose stored configuration no longer matches the plan are reported as `stale-config` and skipped, `--refresh-stale` recomputes them; `--overwrite` recomputes everything, about 10 min on 8 cores, so that every file is stamped with the tagged commit), then `grspin plan analyze`
+- [ ] verify the provenance: `grspin plan provenance` shows the tagged commit, a clean tree and `matches tree = yes` for every entry used in the paper (`config.json` and every realization file carry the commit and the SHA-256 of the sources; realizations are deterministic, so recomputing changes only the stamps)
 - [ ] `grspin plan status` shows `done` for every entry used in the paper
 - [ ] figures and numbers in the manuscript regenerated from `results/`
 - [ ] data-availability statement points to the tagged repository release (e.g. a Zenodo DOI)

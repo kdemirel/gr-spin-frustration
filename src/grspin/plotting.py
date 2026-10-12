@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import matplotlib as mpl
 import numpy as np
@@ -50,6 +51,8 @@ COLOR_RELAXED = "#1f77b4"
 COLOR_INITIAL = "0.6"
 COLOR_NN = "#d62728"
 COLOR_FIT = "#2ca02c"
+COLOR_P = "#e6550d"  # longitudinal channel (orange)
+COLOR_PERP = "#31a354"  # transverse channel (green)
 CYCLE = ["#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#17becf", "#7f7f7f"]
 
 X_LABEL = r"$r/\bar{r}_{\rm nn}$"
@@ -58,9 +61,16 @@ OBS_LABEL = {
     "Q": r"$Q(r)=\langle\cos^2\varphi\rangle$",
     "A": r"$A(r)=\langle(\hat{S}\cdot\hat{r})^2\rangle$",
     "P": r"$P(r)=\langle(\hat{S}_i\cdot\hat{r})(\hat{S}_j\cdot\hat{r})\rangle$",
+    "Cperp": r"$C_\perp(r)=C-P$",
     "B": r"$B(r)=C-3P$",
 }
-OBS_BASELINE = {"C": 0.0, "Q": 1.0 / 3.0, "A": 1.0 / 3.0, "P": 0.0, "B": 0.0}
+OBS_BASELINE = {"C": 0.0, "Q": 1.0 / 3.0, "A": 1.0 / 3.0, "P": 0.0, "Cperp": 0.0, "B": 0.0}
+#: Channel decomposition ``C = P + C_perp``: observable, colour, marker, legend label.
+CHANNELS = (
+    ("C", COLOR_RELAXED, "o", r"$C$"),
+    ("P", COLOR_P, "s", r"$P$ (longitudinal)"),
+    ("Cperp", COLOR_PERP, "^", r"$C_\perp=C-P$ (transverse)"),
+)
 
 
 @contextmanager
@@ -134,10 +144,16 @@ def draw_C(
     data: EnsembleData,
     rebin: int = 1,
     show_initial: bool = True,
-    show_nn: bool = True,
+    show_nn: bool = False,
     fit: FitResult | None = None,
 ) -> None:
-    """``C(r)`` with the nearest-neighbour references and an optional damped-oscillatory fit."""
+    """``C(r)``, optionally with the exact dimer-fraction reference and a damped-oscillatory fit.
+
+    ``show_nn`` draws ``-f_m(x) = -exp(-9 pi rho r^3 / 4)``, the probability that a pair at
+    separation ``r`` is a mutual nearest-neighbour pair (a dimer with ``C = -1``): the exact
+    ``r -> 0`` limit of ``C(r)`` for Poisson positions. The fit is drawn only when passed explicitly;
+    it is a phenomenological guide and not used for quantitative statements.
+    """
     draw_observable(ax, data, "C", rebin, show_initial=show_initial)
     xx = np.linspace(1e-3, data.config.x_max, 400)
     if show_nn:
@@ -147,15 +163,7 @@ def draw_C(
             "--",
             color=COLOR_NN,
             lw=1.0,
-            label=r"$-e^{-9\pi\rho r^{3}/4}$ (mutual NN)",
-        )
-        ax.plot(
-            xx,
-            -theory.isolated_sphere_probability(xx),
-            ":",
-            color=COLOR_NN,
-            lw=1.0,
-            label=r"$-e^{-4\pi\rho r^{3}/3}$",
+            label=r"dimer fraction, $-f_m(x)$",
         )
     if fit is not None and fit.success:
         ax.plot(xx, fit.curve(xx), "-", color=COLOR_FIT, lw=1.1, label="damped-oscillatory fit")
@@ -169,16 +177,95 @@ def draw_Q(ax, data: EnsembleData, rebin: int = 1, show_initial: bool = True) ->
     ax.set_ylim(0.0, 1.05)
 
 
+def _ylim_from_data(
+    t: pd.DataFrame,
+    observables: tuple[str, ...],
+    include: tuple[float, ...] = (),
+    show_initial: bool = True,
+    pad: float = 0.06,
+) -> tuple[float, float]:
+    """Axis limits enclosing mean +- SEM of the given observables (and the values ``include``)."""
+    lows, highs = list(include), list(include)
+    states = ("final", "initial") if show_initial else ("final",)
+    for obs in observables:
+        for state in states:
+            if f"mean_{obs}_{state}" not in t:
+                continue
+            mean = t[f"mean_{obs}_{state}"].to_numpy(float)
+            sem = t[f"sem_{obs}_{state}"].fillna(0.0).to_numpy(float)
+            if np.isfinite(mean).any():
+                lows.append(float(np.nanmin(mean - sem)))
+                highs.append(float(np.nanmax(mean + sem)))
+    if not lows:
+        return -1.0, 1.0
+    lo, hi = min(lows), max(highs)
+    span = (hi - lo) or 1.0
+    return lo - pad * span, hi + pad * span
+
+
 def draw_A(ax, data: EnsembleData, rebin: int = 1, show_initial: bool = True) -> None:
+    """Single-spin axis locking; the limits follow the data and include the isotropic ``1/3``."""
     draw_observable(ax, data, "A", rebin, show_initial=show_initial)
-    ax.set_ylim(0.2, 1.05)
+    ax.set_ylim(*_ylim_from_data(data.table(rebin), ("A",), (1.0 / 3.0,), show_initial))
 
 
 def draw_B(ax, data: EnsembleData, rebin: int = 1, show_initial: bool = True) -> None:
-    """Tensor (pair-energy) correlation; a perfect dimer has ``B = 2``."""
+    """Tensor (pair-energy) correlation; a perfect dimer has ``B = 2`` (dashed reference).
+
+    The limits follow the data (the dipolar control has ``B < 0``), always including zero.
+    """
     draw_observable(ax, data, "B", rebin, show_initial=show_initial)
     ax.axhline(2.0, ls="--", lw=0.8, color="0.6")
-    ax.set_ylim(-0.25, 2.1)
+    ax.set_ylim(*_ylim_from_data(data.table(rebin), ("B",), (0.0,), show_initial))
+
+
+def draw_decomposition(
+    ax,
+    data: EnsembleData,
+    rebin: int = 1,
+    x_min: float = 0.0,
+    show_initial: bool = False,
+    legend: bool = True,
+) -> None:
+    """Channel decomposition ``C = P + C_perp`` of the relaxed state (mean +- SEM, zero line).
+
+    ``P`` is the longitudinal (bond-projected) channel, ``C_perp = C - P`` the transverse one. With
+    ``x_min > 0`` only the tail ``x >= x_min`` is shown with limits that follow those bins.
+    """
+    t = data.table(rebin)
+    sel = (t["x_center"] >= x_min).to_numpy()
+    ax.axhline(0.0, ls=":", lw=0.9, color="0.4")
+    for obs, color, marker, label in CHANNELS:
+        if f"mean_{obs}_final" not in t:
+            continue
+        if show_initial and f"mean_{obs}_initial" in t:
+            ax.errorbar(
+                t["x_center"][sel],
+                t[f"mean_{obs}_initial"][sel],
+                t[f"sem_{obs}_initial"][sel],
+                fmt=marker,
+                ms=2.0,
+                lw=0.7,
+                color=COLOR_INITIAL,
+                mfc="none",
+            )
+        ax.errorbar(
+            t["x_center"][sel],
+            t[f"mean_{obs}_final"][sel],
+            t[f"sem_{obs}_final"][sel],
+            fmt=f"{marker}-",
+            ms=2.8,
+            lw=0.9,
+            color=color,
+            label=label,
+        )
+    ax.set_xlabel(X_LABEL)
+    ax.set_ylabel("pair correlation")
+    ax.set_xlim(x_min, data.config.x_max)
+    present = tuple(obs for obs, *_ in CHANNELS if f"mean_{obs}_final" in t)
+    ax.set_ylim(*_ylim_from_data(t[sel], present, (0.0,), show_initial))
+    if legend:
+        ax.legend(loc="best", fontsize=7)
 
 
 def figure_C(data: EnsembleData, rebin: int = 1, fit: FitResult | None = None, **kw) -> Figure:
@@ -198,26 +285,57 @@ def figure_QA(data: EnsembleData, rebin: int = 1) -> Figure:
         draw_Q(ax_q, data, rebin)
         ax_q.set_xlabel("")
         ax_q.legend(loc="upper right")
-        draw_A(ax_a, data, rebin, show_initial=data.has("init_sum_A"))
+        draw_A(ax_a, data, rebin, show_initial=data.has_observable("A", "initial"))
+    return fig
+
+
+def figure_decomposition(data: EnsembleData, rebin: int = 1, tail: bool = True) -> Figure:
+    """``C``, ``P`` and ``C_perp`` versus ``x`` (top) and a zoom into the tail ``x >= x_max/2``.
+
+    The zoom shows that the anisotropic channels ``P < 0`` and ``C_perp > 0`` persist where their
+    sum ``C`` has nearly cancelled.
+    """
+    with _style():
+        fig = Figure(figsize=(SINGLE_COLUMN, 4.2 if tail else 2.6), layout="constrained")
+        if tail:
+            ax_full, ax_tail = fig.subplots(2, 1)
+            draw_decomposition(ax_full, data, rebin)
+            draw_decomposition(ax_tail, data, rebin, x_min=0.5 * data.config.x_max, legend=False)
+            ax_tail.set_title("tail", loc="right", pad=3)
+        else:
+            draw_decomposition(fig.subplots(), data, rebin)
     return fig
 
 
 def figure_overview(data: EnsembleData, rebin: int = 1, fit: FitResult | None = None) -> Figure:
-    """Double-column overview with panels ``C, Q, A, B``."""
+    """Double-column overview: ``C``, the channel decomposition, ``Q``; ``A``, ``B`` and the tail.
+
+    Panels: (a) ``C(r)`` (with the fit only if ``fit`` is passed), (b) ``C = P + C_perp``,
+    (c) ``Q(r)``, (d) ``A(r)``, (e) ``B(r)`` and (f) the decomposition in the tail ``x >= x_max/2``.
+    Panels that need the extra observables are left blank when the run did not record them.
+    """
     with _style():
-        fig = Figure(figsize=(DOUBLE_COLUMN, 5.4), layout="constrained")
-        axes = fig.subplots(2, 2)
+        fig = Figure(figsize=(DOUBLE_COLUMN, 4.8), layout="constrained")
+        axes = fig.subplots(2, 3)
         draw_C(axes[0, 0], data, rebin, fit=fit)
         axes[0, 0].legend(loc="lower right")
-        draw_Q(axes[0, 1], data, rebin)
-        axes[0, 1].legend(loc="upper right")
-        if data.has("fin_sum_A"):
+        draw_Q(axes[0, 2], data, rebin)
+        axes[0, 2].legend(loc="upper right")
+        if data.has_observable("Cperp"):
+            draw_decomposition(axes[0, 1], data, rebin)
+            draw_decomposition(axes[1, 2], data, rebin, x_min=0.5 * data.config.x_max, legend=False)
+        else:
+            axes[0, 1].axis("off")
+            axes[1, 2].axis("off")
+        if data.has_observable("A"):
             draw_A(axes[1, 0], data, rebin)
-            draw_B(axes[1, 1], data, rebin)
         else:
             axes[1, 0].axis("off")
+        if data.has_observable("B"):
+            draw_B(axes[1, 1], data, rebin)
+        else:
             axes[1, 1].axis("off")
-        for label, ax in zip("abcd", axes.ravel(), strict=True):
+        for label, ax in zip("abcdef", axes.ravel(), strict=True):
             ax.set_title(f"({label})", loc="left", pad=3)
     return fig
 
@@ -354,15 +472,151 @@ def figure_nn(data: EnsembleData, rebin: int = 1) -> Figure:
 
 
 # --------------------------------------------------------------------------------------
+# Dimer-frame map and structure factor
+# --------------------------------------------------------------------------------------
+def _mirrored(cells: np.ndarray) -> np.ndarray:
+    """``(n_z, n_rho)`` cell values as an image over ``z`` (columns) and ``±rho`` (rows)."""
+    return np.concatenate([cells[:, ::-1], cells], axis=1).T
+
+
+def _draw_dimer(ax, x_partner: float) -> None:
+    """Spin ``i`` at the origin and its partner ``j`` on the positive axis."""
+    if np.isfinite(x_partner):
+        ax.plot([0.0, x_partner], [0.0, 0.0], "-", color="k", lw=1.4, solid_capstyle="round")
+        ax.plot(x_partner, 0.0, "o", mfc="w", mec="k", mew=0.9, ms=5, zorder=4)
+        ax.annotate("j", (x_partner, 0.0), xytext=(3, 4), textcoords="offset points", fontsize=7)
+    ax.plot(0.0, 0.0, "o", color="k", mec="w", mew=0.6, ms=5, zorder=4)
+    ax.annotate("i", (0.0, 0.0), xytext=(-8, 4), textcoords="offset points", fontsize=7)
+
+
+def figure_dimer_map(dmap: Mapping[str, Any], vlim: float = 0.6) -> Figure:
+    """Dimer-frame maps of ``C = <u_i . u_k>`` (left) and ``P = <(u_i . r)(u_k . r)>`` (right).
+
+    The cylindrical map ``(z, rho)`` of :meth:`grspin.analysis.EnsembleData.dimer_map` is mirrored
+    in ``rho`` so that the dimer axis runs horizontally through the centre; spin ``i`` sits at the
+    origin and its partner ``j`` at the mean partner distance on the positive axis. Diverging
+    colours on a symmetric scale ``±vlim`` (red: parallel to ``u_i``, blue: antiparallel; white:
+    uncorrelated); cells with fewer than ``min_count`` pooled pairs are grey.
+    """
+    r_max = float(dmap["r_max"])
+    extent = (-r_max, r_max, -r_max, r_max)
+    cmap = mpl.colormaps["RdBu_r"].with_extremes(bad="0.82")
+    panels = (
+        ("C", r"$\langle\hat{S}_i\cdot\hat{S}_k\rangle$"),
+        ("P", r"$\langle(\hat{S}_i\cdot\hat{r}_{ik})(\hat{S}_k\cdot\hat{r}_{ik})\rangle$"),
+    )
+    with _style():
+        fig = Figure(figsize=(DOUBLE_COLUMN, 3.4), layout="constrained")
+        axes = fig.subplots(1, 2, sharey=True)
+        for ax, (obs, label), panel in zip(axes, panels, "ab", strict=True):
+            image = np.ma.masked_invalid(_mirrored(np.asarray(dmap[obs], dtype=float)))
+            im = ax.imshow(
+                image,
+                origin="lower",
+                extent=extent,
+                cmap=cmap,
+                vmin=-vlim,
+                vmax=vlim,
+                interpolation="nearest",
+            )
+            _draw_dimer(ax, float(dmap.get("x_partner_mean", np.nan)))
+            ax.set_title(f"({panel}) {label}", loc="left", pad=3)
+            ax.set_xlabel(r"$z/\bar{r}_{\rm nn}$ (along the dimer axis $i\to j$)")
+            fig.colorbar(im, ax=ax, shrink=0.85, pad=0.03)
+        axes[0].set_ylabel(r"$\rho/\bar{r}_{\rm nn}$ (transverse, mirrored)")
+        axes[0].text(
+            0.02,
+            0.98,
+            f"{dmap.get('n_real', 0)} realizations, {dmap.get('n_pairs', 0)} pairs",
+            transform=axes[0].transAxes,
+            ha="left",
+            va="top",
+            fontsize=7,
+        )
+    return fig
+
+
+def figure_structure_factor(table: pd.DataFrame) -> Figure:
+    """Spherically averaged ``S(k)`` of the unit spins, initial and relaxed (mean ± SEM).
+
+    ``table`` is the frame of :func:`grspin.analysis.structure_factor_from_states` (errors over
+    the states); the first point is ``k = 0``.
+    """
+    with _style():
+        fig = Figure(figsize=(SINGLE_COLUMN, 2.6), layout="constrained")
+        ax = fig.subplots()
+        ax.axhline(1.0, ls=":", lw=0.9, color="0.4", label="uncorrelated directions")
+        for state, color, label in (
+            ("initial", COLOR_INITIAL, "initial (random)"),
+            ("final", COLOR_RELAXED, "relaxed"),
+        ):
+            ax.errorbar(
+                table["k_rnn_mean"],
+                table[f"S_{state}"],
+                table[f"sem_S_{state}"].fillna(0.0),
+                fmt="o-",
+                ms=2.5,
+                lw=0.8,
+                color=color,
+                label=label,
+            )
+        ax.set_xlabel(r"$k\,\bar{r}_{\rm nn}$")
+        ax.set_ylabel(r"$S(k)=|\sum_i \hat{S}_i\,e^{i\mathbf{k}\cdot\mathbf{r}_i}|^2/N$")
+        ax.set_ylim(bottom=0.0)
+        ax.legend(loc="upper right")
+    return fig
+
+
+def figure_structure_factor_comparison(tables: Mapping[str, pd.DataFrame]) -> Figure:
+    """Relaxed ``S(k)`` of several runs (e.g. different cutoffs) on one logarithmic ``k`` axis.
+
+    ``tables`` maps a label to the frame of :func:`grspin.analysis.structure_factor_from_states`;
+    the shells with ``k > 0`` are drawn with their errors over the states, the dotted line marks
+    uncorrelated directions (``S = 1``) and the legend quotes ``S(0)`` of every run, which a
+    logarithmic axis cannot show.
+    """
+    with _style():
+        fig = Figure(figsize=(SINGLE_COLUMN, 2.8), layout="constrained")
+        ax = fig.subplots()
+        ax.axhline(1.0, ls=":", lw=0.9, color="0.4", label="uncorrelated directions")
+        for index, (label, table) in enumerate(tables.items()):
+            shells = table[table["k_rnn_mean"] > 0]
+            zero = table.iloc[0]
+            s0 = f"{zero['S_final']:.2f}"
+            if np.isfinite(zero["sem_S_final"]):
+                s0 += f" ± {zero['sem_S_final']:.2f}"
+            ax.errorbar(
+                shells["k_rnn_mean"],
+                shells["S_final"],
+                shells["sem_S_final"].fillna(0.0),
+                fmt="o-",
+                ms=2.5,
+                lw=0.8,
+                color=CYCLE[index % len(CYCLE)],
+                label=f"{label}: $S(0)$ = {s0}",
+            )
+        ax.set_xscale("log")
+        ax.set_xlabel(r"$k\,\bar{r}_{\rm nn}$")
+        ax.set_ylabel(r"$S(k)$ of the relaxed unit spins")
+        ax.set_ylim(bottom=0.0)
+        ax.legend(loc="best", fontsize=6.5)
+    return fig
+
+
+# --------------------------------------------------------------------------------------
 # Multi-run comparison
 # --------------------------------------------------------------------------------------
 def figure_compare(
     runs: Mapping[str, EnsembleData],
     observables: tuple[str, ...] = ("C", "Q", "A"),
     rebin: int = 1,
-    show_nn: bool = True,
+    show_nn: bool = False,
 ) -> Figure:
-    """Overlay of the ensemble-mean curves of several runs (one panel per observable)."""
+    """Overlay of the ensemble-mean curves of several runs (one panel per observable).
+
+    ``observables`` may contain any entry of :data:`grspin.analysis.OBSERVABLES`, including the
+    channels ``P`` and ``Cperp``; runs lacking an observable are skipped in that panel.
+    """
     first = next(iter(runs.values()))
     with _style():
         fig = Figure(
@@ -373,7 +627,7 @@ def figure_compare(
         for ax, obs in zip(axes, observables, strict=True):
             ax.axhline(OBS_BASELINE[obs], ls=":", lw=0.9, color="0.4")
             for index, (label, data) in enumerate(runs.items()):
-                if not data.has(f"fin_sum_{obs}"):
+                if not data.has_observable(obs):
                     continue
                 t = data.table(rebin)
                 ax.errorbar(
@@ -394,12 +648,40 @@ def figure_compare(
                     "--",
                     color="0.5",
                     lw=0.9,
-                    label=r"$-e^{-9\pi\rho r^{3}/4}$",
+                    label=r"dimer fraction, $-f_m(x)$",
                 )
             ax.set_xlabel(X_LABEL)
             ax.set_ylabel(OBS_LABEL[obs])
             ax.set_xlim(0.0, first.config.x_max)
         axes[0].legend(fontsize=7, loc="lower right" if observables[0] == "C" else "best")
+    return fig
+
+
+def figure_gamma_family(runs: Mapping[str, EnsembleData], rebin: int = 1) -> Figure:
+    """``C``, ``P`` and ``Cperp`` of the channel (``gamma``) family, one panel each.
+
+    The runs are drawn in order of increasing ``gamma`` (the longitudinal weight ``gamma - 1``
+    grows from left to right in the legend), labelled ``gamma = <value>`` followed by the given
+    label: ``transverse_only`` (1), ``gr`` (3), ``gamma12`` (12), ``longitudinal_only`` (100).
+    Runs with ``sigma < 0`` are not part of the family and raise ``ValueError``.
+    """
+    from .analysis import gamma_family_members
+
+    order = gamma_family_members(dict(runs))
+    if order is None:
+        raise ValueError("the runs do not form the channel family (sigma = +1, several gamma)")
+    ordered = {
+        rf"$\gamma = {runs[label].config.sigma_gamma[1]:g}$: {label}": runs[label]
+        for label in order
+    }
+    fig = figure_compare(ordered, ("C", "P", "Cperp"), rebin)
+    with _style():
+        fig.axes[0].legend(fontsize=6.5, loc="lower right")
+        fig.suptitle(
+            r"channel family: $U_{ij} = -(G/r^3)[S_{\perp,i}\cdot S_{\perp,j}"
+            r" - (\gamma-1) S_{r,i} S_{r,j}]$",
+            fontsize=8,
+        )
     return fig
 
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gr-spin-frustration"
-version = "0.1.0"
+version = "0.3.0.dev0"
 description = "Zero-temperature relaxation of classical spins with the general-relativistic spin-spin interaction on random point sets: frustration and pair-correlation analysis."
 readme = "README.md"
 requires-python = ">=3.10"

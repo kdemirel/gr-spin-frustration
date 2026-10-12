@@ -130,14 +130,20 @@ def metropolis(
 ):
     """Single-spin Metropolis annealing at fixed spin magnitudes, in place.
 
-    ``temps`` are absolute temperatures in the (G-free) energy units of :func:`energy`.
-    One sweep is ``N`` proposals at random sites; a proposal perturbs the unit direction by
-    a Gaussian of width ``step`` and renormalizes. Returns the acceptance rate at the last
-    temperature.
+    ``temps`` are absolute temperatures in the (G-free) energy units of :func:`energy`, visited
+    in order (hot to cold for annealing). One sweep is ``N`` proposals at random sites; a
+    proposal perturbs the unit direction by a Gaussian of width ``step`` and renormalizes, and
+    is accepted with the Metropolis probability ``min(1, exp(-dE / T))``.
+
+    Returns the **acceptance rate at every temperature**: an array of ``temps.shape[0]``
+    entries, each the fraction of accepted proposals over all ``sweeps_per_temp`` sweeps at
+    that temperature (NaN if no proposal was made, i.e. all spins have zero length). The last
+    entry is the acceptance at the final (coldest) temperature, *not* an overall rate: it
+    measures how many spins are still soft (``|h_i| s_i`` of order ``T_end``) at the end.
     """
     np.random.seed(seed)
     n = indptr.shape[0] - 1
-    acc_last = 0.0
+    acceptance = np.full(temps.shape[0], np.nan)
     for it in range(temps.shape[0]):
         temperature = temps[it]
         accepted = 0
@@ -181,5 +187,5 @@ def metropolis(
                     spins[i, 2] = nz
                     accepted += 1
         if proposed > 0:
-            acc_last = accepted / proposed
-    return acc_last
+            acceptance[it] = accepted / proposed
+    return acceptance
