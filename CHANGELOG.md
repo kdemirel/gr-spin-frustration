@@ -4,7 +4,10 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.3.0-dev] - unreleased
+## [1.0.0] - 2026-10-12
+
+First public release; the code version of the manuscript "Emergent Spin Textures from Frustrated
+Gravitational Spin-Spin Interactions". It collects the changes below.
 
 Follow-up to the referee report on the frustrated-magnetism aspects of the manuscript: channel
 controls that vary the weight of the longitudinal channel at fixed sign, a causal dimer-field test,
@@ -94,7 +97,7 @@ plan bookkeeping that feeds the energy budget and `S(k)` from stored states. All
   plan/CLI tests of the new entries, comparisons, derived items and flags (about 190 tests, 45 s).
 
 ### Changed
-- Version `0.3.0.dev0` in `pyproject.toml` and the fallback `__version__`.
+- Version `1.0.0` in `pyproject.toml`, the fallback `__version__` and `CITATION.cff`.
 - `analysis.PAIRING_KEYS` includes `min_separation_nn`: hard-core runs are never paired with
   Poisson runs of the same seeds (`cmp_hardcore` is unpaired). `comparison_summary.md` gains a
   `positions` column (`Poisson` or `hard core <x> r_nn`) and the `summary.md` header names the

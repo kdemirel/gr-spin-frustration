@@ -8,7 +8,7 @@ from importlib.metadata import PackageNotFoundError, version
 try:  # pragma: no cover - depends on how the package is installed
     __version__ = version("gr-spin-frustration")
 except PackageNotFoundError:  # pragma: no cover - running from a plain source checkout
-    __version__ = "0.3.0.dev0"
+    __version__ = "1.0.0"
 
 from .config import COUPLINGS, RNN_UNIT_DENSITY, AnnealConfig, SimulationConfig
 
